@@ -7178,7 +7178,7 @@ class KernelWriterAssembly(KernelWriter):
   ##############################################################################
   # Global Read: Do It A/B
   ##############################################################################
-  def globalReadDo(self, kernel, mode, tP):
+  def globalReadDo(self, kernel, mode, tP, warmup=False):
     tc = tP["tensorChar"]
     problemType = self.kernel["ProblemType"]
     imod = Code.StructuredModule("globalReadDo%s_%u"%(tc,mode))
@@ -7344,8 +7344,17 @@ class KernelWriterAssembly(KernelWriter):
     if problemType["ZeroPad%s"%tc]:
       self.vgprPool.checkIn(addrV)
 
+    warmupMod = Code.Module("glWarmup%s"%(tc)) 
+    if warmup:
+      warmupMod.addInst("v_cmpx_eq_u32", "vcc", vgpr("Serial"), "0", "")
+      # warmupMod.addInst("v_cmpx_eq_u32", "vcc", sgpr("WorkGroup0"), "0", "")
+      # warmupMod.addInst("v_cmpx_eq_u32", "vcc", sgpr("WorkGroup1"), "0", "")
+      warmupMod.addCode(imod.flatitems()[0])
+      warmupMod.addInst("s_waitcnt", "vmcnt(0)", "")
+      warmupMod.addInst("s_mov_b64", "exec", "0xffffffffffffffff", "")
+      warmupMod.addInst("s_barrier", "")
 
-    return imod
+    return imod if warmup is not True else (imod, warmupMod)
 
   ##############################################################################
   # Local Write: Swap Offsets A/B
