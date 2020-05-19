@@ -23,9 +23,9 @@ Cijk_Alik_Bljk_HBH_MT64x128x32_MI32x32x4x2SE_GRW1_K1:
   is_ptr64 = 1
   enable_sgpr_kernarg_segment_ptr = 1
   kernarg_segment_byte_size = 80 // bytes of kern args
-  workitem_vgpr_count = 59 // vgprs
+  workitem_vgpr_count = 64 // vgprs
   wavefront_sgpr_count = 96 // sgprs
-  compute_pgm_rsrc1_vgprs = 14 // floor((59-1)/4)
+  compute_pgm_rsrc1_vgprs = 15 // floor((59-1)/4)
   compute_pgm_rsrc1_sgprs = 12 // floor((96-1)/8)
   compute_pgm_rsrc2_tidig_comp_cnt = 0 // 1D wg
   compute_pgm_rsrc2_tgid_x_en = 1 // wg.x
@@ -471,6 +471,7 @@ Kernels:
 .set vgprLocalReadAddrA, 56
 .set vgprLocalReadAddrB, 57
 .set vgprSerial, 58
+.set vgprGlobalReadOffsetWarmup, 59
 /* Num VGPR=59 */
 
 /******************************************/
@@ -957,14 +958,22 @@ s_add_u32 s[sgprStaggerUIter], s[sgprStaggerUIter], 2 // Subtract (PGR-1); Stagg
 s_cmp_eq_u32 s[sgprLoopCounterL], 0                // at last iteration?
 s_cbranch_scc1 ShadowInitStart_8                   // skip to ShadowInitStart iter b/c numIter==0
 
-v_cmpx_eq_u32 vcc, v[vgprSerial], 0                // 
-buffer_load_dwordx4 v[vgprG2LA+0:vgprG2LA+0+3], v[vgprGlobalReadOffsetA+0], s[sgprSrdA:sgprSrdA+3], 0, offen offset:0 // G -> Reg 0_0_0_0
+// TLB warmup
+v_mul_lo_u32 v[vgprGlobalReadOffsetWarmup], s[sgprStrideA0I], v[vgprSerial]
+v_add_u32 v[vgprGlobalReadOffsetWarmup], 0x8, v[vgprGlobalReadOffsetWarmup] // prepad for ptr shift
+v_lshlrev_b32 v[vgprGlobalReadOffsetWarmup], 0x1, v[vgprGlobalReadOffsetWarmup] // *bpe
+v_cmpx_lt_u32 vcc, v[vgprSerial], MT0              // 
+buffer_load_dword v[vgprG2LA], v[vgprGlobalReadOffsetA+0], s[sgprSrdA:sgprSrdA+3], 0, offen offset:0 // G -> Reg 0_0_0_0
 s_waitcnt vmcnt(0)                                 // 
 s_mov_b64 exec, 0xffffffffffffffff                 // 
 s_barrier                                          // 
 
-v_cmpx_eq_u32 vcc, v[vgprSerial], 0                // 
-buffer_load_dwordx4 v[vgprG2LB+0:vgprG2LB+0+3], v[vgprGlobalReadOffsetB+0], s[sgprSrdB:sgprSrdB+3], 0, offen offset:0 // G -> Reg 0_0_0_0
+v_mul_lo_u32 v[vgprGlobalReadOffsetWarmup], s[sgprStrideB1J], v[vgprSerial]
+v_add_u32 v[vgprGlobalReadOffsetWarmup], 0x8, v[vgprGlobalReadOffsetWarmup] // prepad for ptr shift
+v_lshlrev_b32 v[vgprGlobalReadOffsetWarmup], 0x1, v[vgprGlobalReadOffsetWarmup] // *bpe
+v_mov_b32 v0, MT1
+v_cmpx_lt_u32 vcc, v[vgprSerial], v0                // 
+buffer_load_dword v[vgprG2LB], v[vgprGlobalReadOffsetB+0], s[sgprSrdB:sgprSrdB+3], 0, offen offset:0 // G -> Reg 0_0_0_0
 s_waitcnt vmcnt(0)                                 // 
 s_mov_b64 exec, 0xffffffffffffffff                 // 
 s_barrier                                          // 
