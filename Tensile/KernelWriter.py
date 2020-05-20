@@ -762,6 +762,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
       kl.append(self.openSumAtLeastUnroll(kernel, prefetch=True, isPap=isPap, isOptNLL=False))
       if self.enable["GlobalRead"]:
         if kernel["GlobalReadWarmup"]:
+          kl.append(self.comment("Warming up caches"))
           glA, warmupA = self.globalReadDo(kernel, 0, tensorParametersA, warmup=True)
           glB, warmupB = self.globalReadDo(kernel, 0, tensorParametersB, warmup=True)
           kl.append(str(warmupA))

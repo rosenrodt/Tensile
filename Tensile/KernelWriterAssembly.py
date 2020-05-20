@@ -7346,14 +7346,32 @@ class KernelWriterAssembly(KernelWriter):
 
     warmupMod = Code.Module("glWarmup%s"%(tc)) 
     if warmup:
-      warmupMod.addInst("v_cmpx_eq_u32", "vcc", vgpr("Serial"), "0", "")
-      # warmupMod.addInst("v_cmpx_eq_u32", "vcc", sgpr("WorkGroup0"), "0", "")
-      # warmupMod.addInst("v_cmpx_eq_u32", "vcc", sgpr("WorkGroup1"), "0", "")
-      warmupMod.addCode(imod.flatitems()[0])
+      vgprSizePerpDim = self.vgprPool.checkOut(1, "sizePerpDim") # MT reach along perp dim
+      vgprStridePerpDim = self.vgprPool.checkOut(1, "stridePerpDim") # 1d spread between each workitem
+      vgprDummy = self.vgprPool.checkOut(1, "dummy")
+      vgprOffset = self.vgprPool.checkOut(1, "byteOffset")
+
+      sizePerpDim = sgpr("SizeL") if tP["tlu"] else kernel[tP["mt"]] # TODO: get sum char
+      stridePerpDim = sgpr("Stride%s%s"%(tc, ("L" if tP["tlu"] else tP['tileChar']) )) 
+
+      warmupMod.addInst("v_mov_b32", vgpr(vgprSizePerpDim), sizePerpDim, "size of perp dim")
+      warmupMod.addInst("v_mov_b32", vgpr(vgprStridePerpDim), 128, "workitem spread") # TODO: replace magic num with actual spread that's 2MB apart
+      warmupMod.addInst("v_mul_lo_u32", vgpr(vgprOffset), vgpr(vgprStridePerpDim), vgpr("Serial"), "scale by workitem spread")
+      warmupMod.addInst("v_cmpx_lt_u32", "vcc", vgpr(vgprOffset), vgpr(vgprSizePerpDim), "disable workitems falling out of bound")
+      warmupMod.addInst("v_cmpx_lt_u32", "vcc", vgpr("Serial"), 4, "at most 4 workitems") # TODO: factor in occupancy
+      warmupMod.addInst("v_mul_lo_u32", vgpr(vgprOffset), stridePerpDim, vgpr(vgprOffset), "scale by stride")
+      warmupMod.addInst("v_add_u32", vgpr(vgprOffset), hex(self.srdShiftLeft[tc]), vgpr(vgprOffset), \
+        "add prepad for pointer shift")
+      warmupMod.addInst("v_lshlrev_b32", vgpr(vgprOffset), log2(tP["bpe"]), vgpr(vgprOffset), "scale by byte per elem")
+      warmupMod.addInst("buffer_load_dword", vgpr(vgprDummy), vgpr(vgprOffset), sgpr("Srd%s"%tc, 4), "0", "offen offset:0", "")
       warmupMod.addInst("s_waitcnt", "vmcnt(0)", "")
       warmupMod.addInst("s_mov_b64", "exec", "0xffffffffffffffff", "")
       warmupMod.addInst("s_barrier", "")
 
+      self.vgprPool.checkIn(vgprSizePerpDim)
+      self.vgprPool.checkIn(vgprStridePerpDim)
+      self.vgprPool.checkIn(vgprDummy)
+      self.vgprPool.checkIn(vgprOffset)
     return imod if warmup is not True else (imod, warmupMod)
 
   ##############################################################################
