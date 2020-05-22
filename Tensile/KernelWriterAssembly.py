@@ -7348,30 +7348,49 @@ class KernelWriterAssembly(KernelWriter):
     if warmup:
       vgprSizePerpDim = self.vgprPool.checkOut(1, "sizePerpDim") # MT reach along perp dim
       vgprStridePerpDim = self.vgprPool.checkOut(1, "stridePerpDim") # 1d spread between each workitem
+      vgprNumElements = self.vgprPool.checkOut(1, "numElems")
       vgprDummy = self.vgprPool.checkOut(1, "dummy")
       vgprOffset = self.vgprPool.checkOut(1, "byteOffset")
+      vgprFloatPoint999 = self.vgprPool.checkOut(1, "point999")
 
-      sizePerpDim = sgpr("SizeL") if tP["tlu"] else kernel[tP["mt"]] # TODO: get sum char
-      stridePerpDim = sgpr("Stride%s%s"%(tc, ("L" if tP["tlu"] else tP['tileChar']) )) 
+      occupancy = 1 # FIXME can't do lazy evaluation
+      numWarmup = int(32/occupancy/2) # int(32.0/occupancy*(kernel["MacroTile%u"%tP["tensorIdx"]])/(kernel["MacroTile0"]+kernel["MacroTile1"]))
 
+      sumChar = "L" # TODO: get sum char
+      sizePerpDim = sgpr("Size%s"%sumChar) if tP["tlu"] else kernel[tP["mt"]]
+      sizeCoalDim = kernel[tP["mt"]]       if tP["tlu"] else sgpr("Size%s"%sumChar)
+      stridePerpDim = "Stride%s%s"%(tc, (sumChar if tP["tlu"] else tP['tileChar']))
+
+      warmupMod.addInst("v_mov_b32", vgpr(vgprStridePerpDim), sgpr(stridePerpDim), "stride")
       warmupMod.addInst("v_mov_b32", vgpr(vgprSizePerpDim), sizePerpDim, "size of perp dim")
-      warmupMod.addInst("v_mov_b32", vgpr(vgprStridePerpDim), 128, "workitem spread") # TODO: replace magic num with actual spread that's 2MB apart
+      warmupMod.addInst("v_mov_b32", vgpr(vgprNumElements), hex(2*1024*1024//tP["bpe"]), "2MB worth of elements") # 2MB's worth of elements
+      warmupMod.addInst("v_mov_b32", vgpr(vgprFloatPoint999), "0x3f7fffff", "0.999f")
+      warmupMod.addInst("v_cvt_f32_u32", vgpr(vgprStridePerpDim), vgpr(vgprStridePerpDim), "")
+      warmupMod.addInst("v_log_f32", vgpr(vgprStridePerpDim), vgpr(vgprStridePerpDim), "")
+      warmupMod.addInst("v_add_f32", vgpr(vgprStridePerpDim), vgpr(vgprStridePerpDim), vgpr(vgprFloatPoint999), "round to next integer; log2(coalDim)+0.999")
+      warmupMod.addInst("v_cvt_u32_f32", vgpr(vgprStridePerpDim), vgpr(vgprStridePerpDim), "floor and convert to u32")
+      warmupMod.addInst("v_lshrrev_b32", vgpr(vgprStridePerpDim), vgpr(vgprStridePerpDim), vgpr(vgprNumElements), "stridePerpDim = 2MB/stride")
+
       warmupMod.addInst("v_mul_lo_u32", vgpr(vgprOffset), vgpr(vgprStridePerpDim), vgpr("Serial"), "scale by workitem spread")
       warmupMod.addInst("v_cmpx_lt_u32", "vcc", vgpr(vgprOffset), vgpr(vgprSizePerpDim), "disable workitems falling out of bound")
-      warmupMod.addInst("v_cmpx_lt_u32", "vcc", vgpr("Serial"), 4, "at most 4 workitems") # TODO: factor in occupancy
-      warmupMod.addInst("v_mul_lo_u32", vgpr(vgprOffset), stridePerpDim, vgpr(vgprOffset), "scale by stride")
+      warmupMod.addInst("v_cmpx_lt_u32", "vcc", vgpr("Serial"), numWarmup, "at most %u workitems"%numWarmup) 
+      warmupMod.addInst("v_mul_lo_u32", vgpr(vgprOffset), sgpr(stridePerpDim), vgpr(vgprOffset), "scale by stride")
       warmupMod.addInst("v_add_u32", vgpr(vgprOffset), hex(self.srdShiftLeft[tc]), vgpr(vgprOffset), \
         "add prepad for pointer shift")
       warmupMod.addInst("v_lshlrev_b32", vgpr(vgprOffset), log2(tP["bpe"]), vgpr(vgprOffset), "scale by byte per elem")
       warmupMod.addInst("buffer_load_dword", vgpr(vgprDummy), vgpr(vgprOffset), sgpr("Srd%s"%tc, 4), "0", "offen offset:0", "")
-      warmupMod.addInst("s_waitcnt", "vmcnt(0)", "")
       warmupMod.addInst("s_mov_b64", "exec", "0xffffffffffffffff", "")
-      warmupMod.addInst("s_barrier", "")
+      if tc == 'B' :
+        warmupMod.addInst("s_waitcnt", "vmcnt(0)", "")
+        warmupMod.addInst("s_barrier", "")
 
       self.vgprPool.checkIn(vgprSizePerpDim)
       self.vgprPool.checkIn(vgprStridePerpDim)
+      self.vgprPool.checkIn(vgprNumElements)
       self.vgprPool.checkIn(vgprDummy)
       self.vgprPool.checkIn(vgprOffset)
+      self.vgprPool.checkIn(vgprFloatPoint999)
+
     return imod if warmup is not True else (imod, warmupMod)
 
   ##############################################################################
