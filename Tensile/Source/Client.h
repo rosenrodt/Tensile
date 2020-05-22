@@ -2476,21 +2476,6 @@ void initInput(const std::string& tag,
         // Will initialize later for each matrix dim:
         specializeAB = true;
     }
-    else if(dataInitType == 6)
-    {
-        for(size_t i = 0; i < maxSize; i++)
-        {
-            DataType v
-                = tensileGetTrig<DataType>(i); // initialize with sin to get value between -1 and 1.
-            v = (v >= static_cast<DataType>(0)) ? v : static_cast<DataType>(0) - v;
-            if(initOp == AltSign)
-            {
-                v = ((i & 0x1) == 0) ? v : static_cast<DataType>(0) - v;
-            }
-            (*initial)[i] = v;
-        }
-        std::cout << ".";
-    }
     else
     {
         std::cout << "FATAL ERROR: Bad " << tag << " = " << dataInitType << "\n";
