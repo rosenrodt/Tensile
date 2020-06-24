@@ -246,7 +246,17 @@ validMFMA["S"] = [[32,32,1,2], [32,32,2,1], [16,16,1,4], [16,16,4,1], [4,4,1,16]
 validMFMA["B"] = [[32,32,2,2], [32,32,4,1], [16,16,2,4], [16,16,8,1], [4,4,2,16]]
 validMFMA["4xi8"] = [[32,32,4,2], [32,32,8,1], [16,16,4,4], [16,16,16,1], [4,4,4,16]]
 validMFMA["C"] = validMFMA["S"]
+validTT = 8
+validMFMA["_format8"] = []
+for MFMA in [validMFMA["H"], validMFMA["S"], validMFMA["B"], validMFMA["4xi8"]]:
+  for MI in MFMA:
+    for bm in range(int(math.log(MI[3],2))+1):
+      for tt0 in range(1,validTT+1):
+        for tt1 in range(1,validTT+1):
+          for wave_m in range (3):
+            validMFMA["_format8"].append([MI[0],MI[1],MI[2],MI[3],2**bm,tt0,tt1,2**wave_m])
 validMatrixInstructions = [[], [-1]] + validMFMA["H"] + validMFMA["S"] + validMFMA["B"] + validMFMA["4xi8"] + validMFMA["C"]
+validMatrixInstructions = validMatrixInstructions + validMFMA["_format8"]
 
 validParameters = {
     "LoopDoWhile":                [ False, True ], # Source. True=DoWhile, False=For loop
@@ -309,7 +319,7 @@ validParameters = {
     #   no load loop: iter0:plr[2:3] MAC_r[0], iter1: MAC_r[1], iter2: MAC_r[2], iter3:         MAC_r[3]
     "PrefetchLocalRead":          list(range(128+1)),
 
-    # We use double LDS buffer when PrefetchGlobalRead. 
+    # We use double LDS buffer when PrefetchGlobalRead.
     # While it reads data from LDS[0]/[1], it prefetch global data and writes to LDS[1]/[0]
     # If we can make sure all data are read from LDS to register before writing data to LDS, we can use 1 LDS buffer to save LDS memory.
     # this can help to generate Kernel that LDS usage originally exceed MaxLDS if using double LDS buffer,
