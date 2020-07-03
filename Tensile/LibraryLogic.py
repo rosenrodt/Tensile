@@ -424,7 +424,7 @@ class LogicAnalyzer:
       if rowIdx == 1:
         # get the length of each row, and derive the first column of the solution instead of using wrong "solutionStartIdx = totalSizeIdx + 1"
         rowLength = len(row)
-        solutionStartIdx = rowLength - numSolutions        
+        solutionStartIdx = rowLength - numSolutions
         continue
       else:
         #if len(row) < rowLength:
@@ -1444,7 +1444,7 @@ def main(  config ):
     logicTuple = analyzeProblemType( problemType, problemTypes[problemType], \
         analysisParameters)
 
-    LibraryIO.configWriter(globalParameters["YAML"]).writeLibraryLogicForSchedule(globalParameters["WorkingPath"], \
+    LibraryIO.configWriter("yaml").writeLibraryLogicForSchedule(globalParameters["WorkingPath"], \
         analysisParameters["ScheduleName"], analysisParameters["ArchitectureName"], \
         analysisParameters["DeviceNames"], logicTuple)
 
