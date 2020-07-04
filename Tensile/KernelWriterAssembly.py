@@ -1858,7 +1858,7 @@ class KernelWriterAssembly(KernelWriter):
     # Register Pools
     ########################################
     #print "TotalVgprs", self.totalVgprs
-    self.vgprPool = RegisterPool(max(self.totalVgprs, self.totalAgprs), 'v', defaultPreventOverflow=False,
+    self.vgprPool = RegisterPool(self.totalVgprs, 'v', defaultPreventOverflow=False,
                                  printRP=self.db["PrintRP"])
     #print self.vgprPool.state()
     self.savedVgprPool = None
@@ -2578,7 +2578,7 @@ class KernelWriterAssembly(KernelWriter):
         # % (kernArgBytes, self.endLine)
 
     # register allocation
-    totalVgprs = self.vgprPool.size()
+    totalVgprs = max(self.vgprPool.size(), self.agprPool.size())
     totalSgprs = self.sgprPool.size()
     tWord = "workitem_vgpr_count =" if globalParameters["CodeObjectVersion"] == "V2" \
         else ".amdhsa_next_free_vgpr"
@@ -3105,6 +3105,7 @@ class KernelWriterAssembly(KernelWriter):
           self.startVgprAddressDbg)
     #kStr += self.comment1("Occu: %u waves/simd" % self.numWavesPerSimd )
     kStr += self.comment1("Num VGPR=%u"%self.vgprPool.size())
+    kStr += self.comment1("Num AccVGPR=%u"%self.agprPool.size())
 
 
     ########################################
@@ -10904,14 +10905,6 @@ class KernelWriterAssembly(KernelWriter):
     if edge and self.db["AssertNoEdge"]:
       kStr += self.bomb() # should not get here
 
-    if codeAccVgprRead is not None:
-      assert(self.serializedStore) # sanity check
-      for elementIdx in range(0, len(batchElements)):
-        for vi in range(0, gwvw):
-          if len(codeAccVgprRead.items()) > 0:
-            kStr += str(codeAccVgprRead.items().pop(0)).replace("__placeholder__", str(ss.elementSumIdx[elementIdx]+vi))
-      kStr += inst("s_nop 1", "2 wait state required between accvgpr_read and buffer_load")
-
     for elementIdx in range(0, len(batchElements)):
       element = batchElements[elementIdx]
       addr = ss.elementAddr[elementIdx].addrVgpr
@@ -11030,6 +11023,16 @@ class KernelWriterAssembly(KernelWriter):
         # restore full exec mask for calculating addr of next element
         if edge and (beta or atomic):
           kStr += inst("s_mov_b64", "exec", -1, "full mask -1 -> exec" )
+
+    ########################################
+    # AccVgpr read
+    if codeAccVgprRead is not None:
+      assert(self.serializedStore) # sanity check
+      for elementIdx in range(0, len(batchElements)):
+        for vi in range(0, gwvw):
+          if len(codeAccVgprRead.items()) > 0:
+            kStr += str(codeAccVgprRead.items().pop(0)).replace("__placeholder__", str(ss.elementSumIdx[elementIdx]+vi))
+      kStr += inst("s_nop 1", "2 wait states required before reading vgpr")
 
     ########################################
     # rC *= alpha
@@ -11635,7 +11638,7 @@ class KernelWriterAssembly(KernelWriter):
 
     vgprPerCU = 65536
     vgprPerThreadPerOccupancy = vgprPerCU // kernel["NumThreads"]
-    numWorkGroupsPerCU = vgprPerThreadPerOccupancy // self.vgprPool.size()
+    numWorkGroupsPerCU = vgprPerThreadPerOccupancy // max(self.vgprPool.size(), self.agprPool.size())
     if numWorkGroupsPerCU < 1:
       self.overflowedResources = 4
 
