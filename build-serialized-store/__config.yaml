@@ -1,0 +1,91 @@
+GlobalParameters:
+  # PrintSolutionRejectionReason: True
+  NumElementsToValidate: 65536
+  KernelTime: True
+  DataInitTypeAlpha: 1
+  DataInitTypeBeta: 1
+  #DataInitTypeA: 1
+  #DataInitTypeB: 2
+  NewClient: 2
+  NumBenchmarks: 16
+  #PrintTensorA: 1
+  #PrintTensorB: 1
+  #PrintTensorC: 1
+  MergeFiles: False
+
+BenchmarkProblems:
+  ########################################
+  # NT - standard
+  ########################################
+  -
+    - # ProblemType
+      OperationType: GEMM
+      DataType: h
+      # DestDataType: B
+      # ComputeDataType: s
+      HighPrecisionAccumulate: True
+      TransposeA: False
+      TransposeB: True
+      UseBeta: True
+      Batched: True
+    - # BenchmarkProblemSizeGroup - Standard
+      InitialSolutionParameters:
+      BenchmarkCommonParameters:
+        - KernelLanguage: ["Assembly"]
+        - EdgeType: ["ShiftPtr"]
+        #- LoopTail: [True]
+      ForkParameters:
+        - MatrixInstruction:
+          - [32, 32, 4, 2]
+          # - [32, 32, 4, 2]
+          # - [16, 16, 4, 4]
+          # - [16, 16, 2, 4]
+          # # - [16, 16, 1, 4]
+        - ThreadTile:
+          # - [ 1, 16 ]
+          # - [ 2, 16 ] 
+          # - [ 1, 32 ] 
+          # - [ 2, 64 ] 
+          - [ 2, 32 ] 
+        - WorkGroup:
+          - [ 64, 4, 1 ]
+          # - [ 16, 8, 1 ]
+          #- [ 16, 16, 1 ]
+        - AssertSummationElementMultiple: [1]
+        # - AssertFree0ElementMultiple: [1,8]
+        - AssertFree1ElementMultiple: [1]
+        - PrefetchGlobalRead: [1]
+        - PrefetchLocalRead: [1]
+        - DepthU: [32]
+        - VectorWidth: [2]
+        - GlobalReadVectorWidth: [4]
+        - ScheduleIterAlg: [3]
+        # - InnerUnroll: [1,2,4]
+        - StoreBatchSize: [-1, 2, 4, 8, 12, 16, 24, 32, 64 ,128]
+          #- StoreRemapVectorWidth: [0,4,8]
+        # - SuppressNoLoadLoop: [1]
+        # - DisableVgprOverlapping: [1]
+        # - WaveSeparateGlobalReadA: [0,1]
+        # - WaveSeparateGlobalReadB: [0,1]
+        # - WorkGroupMapping: [1,4,10]
+        # - StaggerUMapping: [0,3]
+      JoinParameters:
+      BenchmarkJoinParameters:
+        # - ProblemSizes:
+        #   - Exact: [ 3840, 4096, 1, 4096, 4192, 4192, 4192, 4192 ]
+        # # - StaggerU: [16,32,64]
+        # - StaggerUStride: [64,128,256]
+      BenchmarkFinalParameters:
+        - ProblemSizes:
+          # - Exact: {sizes: [ 15, 64, 10880, 15 ], stridesA: [ -1, 15, 225 ], stridesB: [ -1, 696320, 64 ], stridesC: [ -1, 15, 960 ], stridesD: [ -1, 15, 960 ] }
+          # - Range : [ [127,1,256], [128], [1], [128] ]
+        #          - Exact: [ 1024, 1024, 1, 3960, 1024, 1024, 1024, 1024 ]
+        #          - Exact: [ 1024, 4096, 1, 3240, 1024, 1024, 1024, 4096 ]
+            - Exact: [ 1024, 4096, 1, 3960, 1024, 1024, 1024, 4096 ]
+        #          - Exact: [ 1024, 42720, 1, 3960, 1024, 1024, 1024, 42720 ]
+        #          - Exact: [ 4096, 1024, 1, 3240, 4096, 4096, 4096, 1024 ]
+        #          - Exact: [ 4096, 1024, 1, 3960, 4096, 4096, 4096, 1024 ]
+LibraryLogic:
+    ScheduleName: "arcturus"
+    DeviceNames: ["Device 7380", "Device 7388", "Device 738c", "Device 7390"]
+    ArchitectureName: "gfx908"

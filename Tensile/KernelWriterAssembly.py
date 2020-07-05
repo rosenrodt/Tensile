@@ -10463,6 +10463,8 @@ class KernelWriterAssembly(KernelWriter):
 
         # TODO: Minimum elems for StoreRemap
         minElements = 2 if (kernel["ProblemType"]["DataType"].isHalf() or kernel["ProblemType"]["DataType"].isBFloat16()) else 1
+        if kernel["StoreBatchSize"] > 0:
+          minElements = max(minElements, kernel["StoreBatchSize"])
         minNeeded = minElements*numVgprsPerElement
         shrinkDb = 0
         if shrinkDb:
@@ -10473,6 +10475,9 @@ class KernelWriterAssembly(KernelWriter):
           currentOccupancy = self.getOccupancy(kernel, self.vgprPool.size(), self.agprPool.size())
           futureOccupancy = self.getOccupancy(kernel, \
               self.vgprPool.size() - numVgprAvailable + minNeeded, self.agprPool.size())
+          if futureOccupancy < currentOccupancy and kernel["StoreBatchSize"] > 0:
+            print("StoreBatchSize aims to increase number of store without decreasing occupancy; rejecting kernel")
+            self.overflowedResources = 5
 
           if shrinkDb:
             print("currentOccupancy=%u futureOccupancy=%u VGPRs=%u numVgprAvail=%u vgprPerElem=%u" \
@@ -10509,6 +10514,8 @@ class KernelWriterAssembly(KernelWriter):
         # print("NumVgprAvailable", numVgprAvailable)
         if numVgprsPerElement:
           numElementsPerBatch = numVgprAvailable // numVgprsPerElement
+          if kernel["StoreBatchSize"] > 0:
+            numElementsPerBatch = kernel["StoreBatchSize"]
         else:
           numElementsPerBatch = len(elements[edgeI]) # max, do 'em all
 
