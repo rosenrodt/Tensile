@@ -120,12 +120,13 @@ class RegisterPool:
   ########################################
   # Init
   # defaultPreventOverflow: control behavior of checkout and checkoutAligned when preventOverflow is not explicitly specificed.
-  def __init__(self, size, type, defaultPreventOverflow, printRP=0):
+  def __init__(self, size, type, maxSize, defaultPreventOverflow, printRP=0):
     self.printRP=printRP
     self.type = type
     self.defaultPreventOverflow = defaultPreventOverflow
     self.pool = [self.Register(RegisterPool.Status.Unavailable, "init") for i in range(0,size)]
     self.checkOutSize = {}
+    self.maxSize = maxSize
 
   ########################################
   # Adds registers to the pool so they can be used as temps
@@ -224,7 +225,7 @@ class RegisterPool:
       if self.printRP:
         print("RP::checkOut '%s' (%u,%u) @ %u avail=%u"%(tag, size,alignment, found, self.available()))
         #print self.state()
-      return found
+
     # need overflow
     else:
       #print "RegisterPool::checkOutAligned(%u,%u) overflowing past %u" % (size, alignment, len(self.pool))
@@ -245,6 +246,8 @@ class RegisterPool:
       #print "Aligned Start: ", start
       # new checkout can begin at start
       newSize = start + size
+      if newSize > self.maxSize:
+        raise RuntimeError("maximum available pool (%u) reached: to check out %u, current %u"%(self.maxSize, size, self.size()))
       oldSize = len(self.pool)
       overflow = newSize - oldSize
       #print "Overflow: ", overflow
@@ -261,7 +264,9 @@ class RegisterPool:
       if self.printRP:
         print(self.state())
         print("RP::checkOut' %s' (%u,%u) @ %u (overflow)"%(tag, size, alignment, start))
-      return start
+      found = start
+    assert(found+size-1 < self.maxSize)
+    return found
 
   def initTmps(self, initValue, start=0, stop=-1):
     kStr = ""
@@ -1561,7 +1566,7 @@ class KernelWriterAssembly(KernelWriter):
 
     ####################################
     # num sgprs: initial kernel state
-    self.sgprPool = RegisterPool(0, 's', defaultPreventOverflow=True, printRP=0)
+    self.sgprPool = RegisterPool(0, 's', self.maxSgprs, defaultPreventOverflow=True, printRP=0)
     numSgprAddressD = self.rpga # til end
     numSgprAddressC = self.rpga # til end
     numSgprAddressA = self.rpga # til read offsets
@@ -1878,7 +1883,7 @@ class KernelWriterAssembly(KernelWriter):
     # Register Pools
     ########################################
     #print "TotalVgprs", self.totalVgprs
-    self.vgprPool = RegisterPool(self.totalVgprs, 'v', defaultPreventOverflow=False,
+    self.vgprPool = RegisterPool(self.totalVgprs, 'v', self.maxVgprs, defaultPreventOverflow=False,
                                  printRP=self.db["PrintRP"])
     #print self.vgprPool.state()
     self.savedVgprPool = None
@@ -1907,7 +1912,7 @@ class KernelWriterAssembly(KernelWriter):
         self.numVgprValuC, "ValuC-Block") # Add as available
     #print self.vgprPool.state()
 
-    self.agprPool = RegisterPool(self.totalAgprs, 'a', defaultPreventOverflow=False, printRP=0)
+    self.agprPool = RegisterPool(self.totalAgprs, 'a', self.maxVgprs, defaultPreventOverflow=False, printRP=0)
     # C regs are not used during initialization so mark them as available -
     # we will claim then just before the start of the unroll loop:
     self.agprPool.add(0, self.totalAgprs, "ValuC-Block")
