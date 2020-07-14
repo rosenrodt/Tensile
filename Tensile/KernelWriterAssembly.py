@@ -9028,7 +9028,8 @@ class KernelWriterAssembly(KernelWriter):
         self.optSingleColVgpr = 0 # BOZO, hack to disable this
         self.optSharedColVgpr = 0# BOZO, hack to disable this
 
-      self.optSharedMask  = kernel["BufferStore"] and not edge and not atomic
+      # self.optSharedMask  = kernel["BufferStore"] and not edge and not atomic
+      self.optSharedMask  = kernel["BufferStore"] and not atomic
 
 
       # can't have both of these enabled:
