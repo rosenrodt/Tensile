@@ -584,13 +584,12 @@ class KernelWriterAssembly(KernelWriter):
     return rv
 
   ########################################
-  def getOccupancy(self, kernel, vgprs, accvgprs=0):
-    multiplier = int(ceil(max(kernel["NumThreads"], 256) / 256.0))
+  # TODO: also consider sgpr
+  @staticmethod
+  def getOccupancy(self, numThreads, vgprs, ldsSize, accvgprs=0):
+    multiplier = int(ceil(max(numThreads, 256) / 256.0))
     # example: wg=512 multiplier=2, 1024=4
 
-    maxLds = 65536
-    ldsSize = kernel["LdsNumElements"] * kernel["ProblemType"]["DataType"].numBytes()
-    ldsSize = (ldsSize + 255) & 0x1ff00 # 256-byte granularity
     ldsLimitedOccupancy = self.getLdsLimitedOccupancy(ldsSize)
 
     vgprs *= multiplier
@@ -9911,15 +9910,16 @@ class KernelWriterAssembly(KernelWriter):
         # TODO : the vgprSerial is needed for-ever and if we grow here will split the
         # range of the tmps.  Maybe want to move vgprSerial to first vgpr?
 
-        # TODO: Minimum elems for StoreRemap
         minElements = 2 if (kernel["ProblemType"]["DataType"].isHalf() or kernel["ProblemType"]["DataType"].isBFloat16()) else 1
         minNeeded = minElements*numVgprsPerElement
+        """ Note: comment out effectively dead code. Will remove in the future
         shrinkDb = 0
         if shrinkDb:
           print("numVgprAvailable=", numVgprAvailable, "minElements=", minElements, "minNeeded=", minNeeded)
+        """
         if numVgprAvailable < minNeeded:
+          """ Note: comment out effectively dead code. Will remove in the future
           gwvwOrig = gwvw
-          # TODO: consider the rest of limiters ie sgpr
           currentOccupancy = self.getOccupancy(kernel, self.vgprPool.size(), self.agprPool.size())
           futureOccupancy = self.getOccupancy(kernel, \
               self.vgprPool.size() - numVgprAvailable + minNeeded, self.agprPool.size())
@@ -9940,33 +9940,28 @@ class KernelWriterAssembly(KernelWriter):
             if shrinkDb:
               print2("info: %s shrank gwvw from %u to %u but kept occupancy same=%u." \
                   % (self.kernelName, gwvwOrig, gwvw, currentOccupancy))
-
-          if numVgprAvailable < minElements*numVgprsPerElement:
-            print2("info: growing pool += %d * %d for GlobalWrite\n" \
-                % (minElements,numVgprsPerElement))
-            print2(self.vgprPool.state())
-            tl = []
-            for i in range(0,minElements):
-              tl.append(self.vgprPool.checkOut(numVgprsPerElement, "grow-pool for GlobalWrite"))
-            for t in tl:
-              self.vgprPool.checkIn(t)
-            numVgprAvailable = self.vgprPool.available()
-            print2(self.vgprPool.state())
+          """
+          print2("info: growing pool += %d * %d for GlobalWrite\n" \
+              % (minElements,numVgprsPerElement))
+          print2(self.vgprPool.state())
+          tl = []
+          for i in range(0,minElements):
+            tl.append(self.vgprPool.checkOut(numVgprsPerElement, "grow-pool for GlobalWrite"))
+          for t in tl:
+            self.vgprPool.checkIn(t)
+          numVgprAvailable = self.vgprPool.available()
+          print2(self.vgprPool.state())
 
         # set atomicW after we potentially resize GWVW
         atomicW = min(gwvw, kernel["VectorAtomicWidth"])
 
         # print("NumVgprAvailable", numVgprAvailable)
-        if numVgprsPerElement:
-          numElementsPerBatch = numVgprAvailable // numVgprsPerElement
-        else:
-          numElementsPerBatch = len(elements[edgeI]) # max, do 'em all
-
-        assert(self.numVgprValuC % gwvw == 0) # sanity check
-
+        numElementsPerBatch = numVgprAvailable // numVgprsPerElement
+        """ Note: comment out effectively dead code. Will remove in the future
         if shrinkDb:
           print("NumElementsPerBatch=", numElementsPerBatch, "LimitedBySgprs=", self.ss.cfg.numElementsPerBatchLimitedBySgprs, \
               "WARNING" if self.ss.cfg.numElementsPerBatchLimitedBySgprs < numElementsPerBatch else "okay")
+        """
         if self.ss.cfg.numElementsPerBatchLimitedBySgprs < numElementsPerBatch:
           numElementsPerBatch = self.ss.cfg.numElementsPerBatchLimitedBySgprs
 
@@ -9981,8 +9976,10 @@ class KernelWriterAssembly(KernelWriter):
             # to mark overflowedResources rather than generate a kernel that won't work.
             # It might be possible to fix globalWriteBatch to handle this case but these
             # are likely to be low-performing so likely not worth optimizing.
+            """ Note: comment out effectively dead code. Will remove in the future
             if shrinkDb:
               print("WARNING: half requires at least two elements per batch")
+            """
             self.overflowedResources = 3
 
         assert numElementsPerBatch > 0, "numElementsPerBatch=0 for %s"%self.kernelName
@@ -9998,6 +9995,7 @@ class KernelWriterAssembly(KernelWriter):
 
         # check best numElementsPerBatch to handle a column block
         # elements of column block must be multiple size of numElementsPerBatch
+        # TODO: can we write multiple columns to fully utilize LDS space?
         if kernel["StoreRemapVectorWidth"]:
           firstRow = [e for e in elements[edgeI] if e[0]==0 and e[2]==0] # format for element = (tt1, tt0, vc1, vc0)
           # find the largest factor and smaller than numElementPerBatch
