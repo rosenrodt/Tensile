@@ -2807,9 +2807,9 @@ class KernelWriterAssembly(KernelWriter):
       else:
         msg = "unknown"
 
-      printWarning("%s overflowed resources.  errorCode=%d, msg=\"%s\", vgprs=%u, sgprs=%u" \
+      printWarning("%s overflowed resources.  errorCode=%d, msg=\"%s\", vgprs=%u, sgprs=%u, accvgprs=%u" \
           % (self.kernelName, self.overflowedResources, msg, \
-          self.vgprPool.size(), self.sgprPool.size()))
+          self.vgprPool.size(), self.sgprPool.size(), self.agprPool.size()))
       kStr += "s_endpgm // overflowed resources\n"
       kStr += ".if 0\n"
 
