@@ -2174,7 +2174,8 @@ class Solution:
     if state["EnableMatrixInstruction"]:
       if not (state["ProblemType"]["DataType"].isSingle() \
               or state["ProblemType"]["DataType"].isBFloat16() \
-              or state["ProblemType"]["DataType"].isHalf()):
+              or state["ProblemType"]["DataType"].isHalf() \
+              or state["ProblemType"]["DataType"].isSingleComplex()):
         reject(state, "didn't support Matrix Instruction with type %s" % str(state["ProblemType"]["DataType"]))
       if not state["MIBlock"] or len(state["MIBlock"]) != 6:
         reject(state, "invalid MIBlock")
@@ -2183,7 +2184,7 @@ class Solution:
       if not state["MIWaveTile"] or len(state["MIWaveTile"]) != 2:
         reject(state, "invalid MIWaveTile")
       if not state["ProblemType"]["HighPrecisionAccumulate"] \
-         and not state["ProblemType"]["DataType"].isSingle() :
+         and state["ProblemType"]["DataType"].numRegisters() < 1 :
         reject(state, "Matrix instructions for half types are natively accumulated" + \
          " in fp32 precision. Please add the following config:" + \
          "\n - HighPrecisionAccumulate: True")
@@ -2382,7 +2383,10 @@ class Solution:
       #TODO : re-enable later after running testlists
       #state["StoreVectorWidth"] = state["VectorWidth"]
       # use wider store for best store optimization
-      state["StoreVectorWidth"] = 4
+      if state["ProblemType"]["DataType"].numRegisters() <= 1:
+        state["StoreVectorWidth"] = 4
+      elif state["ProblemType"]["DataType"].numRegisters() == 2:
+        state["StoreVectorWidth"] = 2
 
     if state["VectorWidth"]*state["ProblemType"]["DataType"].numBytes() > 16:
       # reject - VW too big

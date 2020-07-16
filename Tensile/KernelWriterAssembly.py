@@ -5485,7 +5485,7 @@ class KernelWriterAssembly(KernelWriter):
     accs_per_wave    = kernel["MatrixInstM"] * kernel["MatrixInstN"] * kernel["MatrixInstB"] / globalParameters["WavefrontWidth"]
     dividerFortidInK = kernel["MatrixInstN"] * kernel["MatrixInstB"]
     numMIInput       = kernel["ProblemType"]["DataType"].numMIInput()
-    vgprPerInput     = int(numMIInput * numRegisters)
+    vgprPerInput     = int(numMIInput * numRegisters) if not kernel["ProblemType"]["DataType"].isSingleComplex else 1
     shiftPerElement  = int(numRegisters * 32)
     s_nop            = 0
 
@@ -5574,10 +5574,25 @@ class KernelWriterAssembly(KernelWriter):
           b_new = b*vgprPerInput*self.numReadsIterCoalesced
           aStr     = vgpr("ValuA_X%u_I%u+%u+%u+%u" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), vgprPerInput)
           bStr     = vgpr("ValuB_X%u_I%u+%u+%u+%u" % (vgprBuffer_new, iui_new, b_new, vgprBuffer_new_offset, iui_new_offset), vgprPerInput)
-
-          imod.addCode("v_mfma_f32_%ux%ux%u%s a[%u:%u], %s, %s, a[%u:%u]%s" \
-                     % (kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], kernel["ProblemType"]["DataType"].toNameAbbrev(),
-                        accStart, accEnd, aStr, bStr, accStart, accEnd, self.endLine))
+          if kernel["ProblemType"]["DataType"].isSingleComplex():
+            # override because complex mul is emulated by 4 mfma insts
+            numMIBlocks = kernel["MatrixInstBM"] * kernel["MatrixInstBN"]
+            numWaveTiles = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1]
+            OutputsPerMFMA1B = kernel["MatrixInstM"] * kernel["MatrixInstN"] // globalParameters["WavefrontWidth"]
+            accImOffset = OutputsPerMFMA1B * numWaveTiles * numMIBlocks
+            aRealStr = vgpr("ValuA_X%u_I%u+%u+%u+%u" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), vgprPerInput)
+            aImagStr = vgpr("ValuA_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), vgprPerInput)
+            bRealStr = vgpr("ValuB_X%u_I%u+%u+%u+%u" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), vgprPerInput)
+            bImagStr = vgpr("ValuB_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), vgprPerInput)
+            imod.addInst("v_mfma_f32_%ux%ux%u%s a[%u:%u], %s, %s, a[%u:%u]"%(kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], "f32", accStart, accEnd, aRealStr, bRealStr, accStart, accEnd), "Cr += Ar*Br")
+            imod.addInst("v_mfma_f32_%ux%ux%u%s a[%u:%u], %s, %s, a[%u:%u]"%(kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], "f32", accStart+accImOffset, accEnd+accImOffset, aImagStr, bRealStr, accStart+accImOffset, accEnd+accImOffset), "Ci += Ai*Br")
+            imod.addInst("v_sub_f32", aImagStr, "0", aImagStr, "Ai = -Ai (negation)")
+            imod.addInst("v_mfma_f32_%ux%ux%u%s a[%u:%u], %s, %s, a[%u:%u]"%(kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], "f32", accStart, accEnd, aImagStr, bImagStr, accStart, accEnd), "Cr += -Ai*Bi")
+            imod.addInst("v_mfma_f32_%ux%ux%u%s a[%u:%u], %s, %s, a[%u:%u]"%(kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], "f32", accStart+accImOffset, accEnd+accImOffset, aRealStr, bImagStr, accStart+accImOffset, accEnd+accImOffset), "Ci += Ar*Bi")
+          else:
+            imod.addCode("v_mfma_f32_%ux%ux%u%s a[%u:%u], %s, %s, a[%u:%u]%s" \
+                      % (kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], kernel["ProblemType"]["DataType"].toNameAbbrev(),
+                          accStart, accEnd, aStr, bStr, accStart, accEnd, self.endLine))
 
     # release register
     self.vgprPool.checkIn(kReg)
