@@ -1872,7 +1872,7 @@ class KernelWriterAssembly(KernelWriter):
 
     # complex multiplication is emulated by 4 matrix instructions operating on real and imaginary numbers
     # multiplier 2 indicates complex mul requires equal share of extra vgprs to store the imaginary part
-    self.agprMultiplier = 2 if kernel["ProblemType"]["DataType"].isComplex() else 1
+    self.agprMultiplier = 2 if kernel["ProblemType"]["DataType"].isComplex() else 1 # TODO ANT: rename this var to associate it with complex mul
 
     if "MatrixInstM" in kernel:
       self.destAgprs  = kernel["MatrixInstM"] * kernel["MatrixInstN"] * kernel["MatrixInstB"] // globalParameters["WavefrontWidth"]
@@ -7746,6 +7746,11 @@ class KernelWriterAssembly(KernelWriter):
                   kStr += inst("v_accvgpr_read_b32", vgpr(tmpVgpr), accvgpr(arch2acc[srcVgpr]), "")
                   kStr += inst("s_nop", "1", "v_accvgpr read vgpr after write vgpr: 2 wait states")
                   kStr += inst("v_accvgpr_write_b32", accvgpr(arch2acc[dstVgpr]), vgpr(tmpVgpr), "acc%u = acc%u"%(arch2acc[dstVgpr], arch2acc[srcVgpr]))
+                  if self.agprMultiplier == 2:
+                    accImOffset = self.AccVgprImagNumOffset(kernel)
+                    kStr += inst("v_accvgpr_read_b32", vgpr(tmpVgpr), accvgpr(arch2acc[srcVgpr]+accImOffset), "")
+                    kStr += inst("s_nop", "1", "v_accvgpr read vgpr after write vgpr: 2 wait states")
+                    kStr += inst("v_accvgpr_write_b32", accvgpr(arch2acc[dstVgpr]+accImOffset), vgpr(tmpVgpr), "acc%u (imag)= acc%u (imag)"%(arch2acc[dstVgpr] + accImOffset, arch2acc[srcVgpr] + accImOffset))
                 else:
                   kStr += inst("v_mov_b32", vgpr(dstVgpr), vgpr(srcVgpr), "")
 
@@ -11296,11 +11301,13 @@ class KernelWriterAssembly(KernelWriter):
 
   @staticmethod
   def AccVgprImagNumOffset(kernel):
-    numMIBlocks = kernel["MatrixInstBM"] * kernel["MatrixInstBN"]
-    numWaveTiles = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1]
-    OutputsPerMFMA1B = kernel["MatrixInstM"] * kernel["MatrixInstN"] // globalParameters["WavefrontWidth"]
-    accImOffset = OutputsPerMFMA1B * numWaveTiles * numMIBlocks
-
+    if kernel["MatrixInstM"] == 4:
+      accImOffset = kernel["MIOutputVectorWidth"] * kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1]
+    else:
+      numMIBlocks = kernel["MatrixInstBM"] * kernel["MatrixInstBN"]
+      numWaveTiles = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1]
+      OutputsPerMFMA1B = kernel["MatrixInstM"] * kernel["MatrixInstN"] // globalParameters["WavefrontWidth"]
+      accImOffset = OutputsPerMFMA1B * numWaveTiles * numMIBlocks
     return accImOffset
 
   ##############################################################################
