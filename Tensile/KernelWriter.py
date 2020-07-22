@@ -110,7 +110,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
     lastLoadIter = 0
     if kernel["EnableMatrixInstruction"] and kernel["ScheduleIterAlg"] == 3:
-      numMfmaPerIter = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1] * kernel["InnerUnroll"]
+      numMfmaPerIter = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1] * kernel["InnerUnroll"] * 4
       # Can locally overrid these ######
       # number of mfma between last localWrite and barrier
       numMfmaBetweenLWandBarrier = 1 if kernel["MatrixInstM"] == 32 else 2
@@ -443,7 +443,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
     elif self.scheduleIterAlg == 3:
       # mfma interleave
       if kernel["EnableMatrixInstruction"]:
-        numMfmaPerIter = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1] * kernel["InnerUnroll"]
+        numMfmaPerIter = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1] * kernel["InnerUnroll"] * 4 # TODO ANT:
         writesModPerIter = len(localWriteCode.items())//self.numLocalWriteModPerMfma if self.numLocalWriteModPerMfma != 0 else len(localWriteCode.items())
         localWriteEndIter = kernel["LoopIters"] - self.numItersPLR - 1
         isBarrier = localWriteEndIter + 1

@@ -2385,8 +2385,8 @@ class Solution:
       # use wider store for best store optimization
       if state["ProblemType"]["DataType"].numRegisters() <= 1:
         state["StoreVectorWidth"] = 4
-      elif state["ProblemType"]["DataType"].numRegisters() == 2:
-        state["StoreVectorWidth"] = 2
+      else:
+        state["StoreVectorWidth"] = 4//state["ProblemType"]["DataType"].numRegisters()
 
     if state["VectorWidth"]*state["ProblemType"]["DataType"].numBytes() > 16:
       # reject - VW too big
