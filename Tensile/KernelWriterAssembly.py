@@ -11358,7 +11358,7 @@ class KernelWriterAssembly(KernelWriter):
     self.codeAccVgprRead = Code.Module("AccVgprRead")
     self.codeAccVgprRead.itemList = [None] * len(acc2arch) * self.agprMultiplier
 
-    if self.bpeCinternal > 1: #TODO ANT: adopt component
+    if kernel["ProblemType"]["DataType"].isComplex():
       accImOffset = self.AccVgprImagNumOffset(kernel)
       rpe = self.bpeCinternal//self.bpr
       for i, e in enumerate(acc2arch):
