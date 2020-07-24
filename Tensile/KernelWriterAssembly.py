@@ -10979,6 +10979,7 @@ class KernelWriterAssembly(KernelWriter):
           storesIssued += 1
 
         else:
+          sumIdx = ss.elementSumIdx[elementIdx]
           kStr += self.storeRemapAddLocalWrite(kernel, ss, addrCalc, sumIdx)
           # Column Block Shape has been written to LDS
           # Now read back and write out to global memory
@@ -11367,11 +11368,11 @@ class KernelWriterAssembly(KernelWriter):
           self.codeAccVgprRead.itemList[realNumIdx] = Code.Inst("v_accvgpr_read_b32",
                                                             vgpr("ValuC+__placeholder__") if self.serializedStore else vgpr("ValuC+%u" % realNumIdx),
                                                             "acc%u" % i,
-                                                            "copy areg to vreg[%u]"%realNumIdx) #TODO ANT: clarify
+                                                            "copy areg (real) to vreg[%u]"%realNumIdx)
           self.codeAccVgprRead.itemList[imagNumIdx] = Code.Inst("v_accvgpr_read_b32",
                                                             vgpr("ValuC+__placeholder__") if self.serializedStore else vgpr("ValuC+%u" % imagNumIdx),
                                                             "acc%u" % (i+accImOffset),
-                                                            "copy areg to vreg[%u]"%imagNumIdx)
+                                                            "copy areg (imag) to vreg[%u]"%imagNumIdx)
         else:
           assert(False) # unimplemented
       return kStr if self.serializedStore else kStr+str(self.codeAccVgprRead)

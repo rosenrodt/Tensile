@@ -2828,12 +2828,10 @@ class Solution:
         reject(state, "storeRemap doesn't support MI4x4 multi blocks in N direction yet")
         return
 
-      srMinVw = 1
-      srMaxVw = 8
-      if state["ProblemType"]["DataType"].isSingle():
-        srMaxVw = 4
-      elif state["ProblemType"]["DataType"].isHalf() or state["ProblemType"]["DataType"].isBFloat16():
-        srMinVw = 2
+      storeInstMinWidth = 1 # minimum dwordx1
+      storeInstMaxWidth = 4 # maximum dwordx4
+      srMinVw = max(storeInstMinWidth, int(1/state["ProblemType"]["DataType"].numRegisters()))
+      srMaxVw = int(storeInstMaxWidth/state["ProblemType"]["DataType"].numRegisters())
       if srMinVw > state["StoreRemapVectorWidth"] or srMaxVw < state["StoreRemapVectorWidth"]:
         reject(state, "StoreRemapVectorWidth %u is not allowed for this data type" % state["StoreRemapVectorWidth"])
         return
