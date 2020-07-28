@@ -23,6 +23,7 @@ from .Common import globalParameters, HR, pushWorkingPath, popWorkingPath, print
 from . import ClientExecutable
 from . import Common
 from . import LibraryIO
+from .SolutionStructs import ExactDict
 
 import os
 import subprocess
@@ -471,7 +472,7 @@ def problemSizeParams(solution, problem):
 
     cstrides = problem.stridesC
     dstrides = problem.stridesD
-    if len(problem.sizes) == numIndices:
+    if len(problem.sizes) == numIndices or isinstance(problem, ExactDict):
         None
     elif len(problem.sizes) == numIndices + 4:
         # FIXME-problem, this is Exact format with strides tacked onto sizes as 4 extra pams
