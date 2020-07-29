@@ -5490,7 +5490,7 @@ class KernelWriterAssembly(KernelWriter):
     accs_per_wave    = kernel["MatrixInstM"] * kernel["MatrixInstN"] * kernel["MatrixInstB"] / globalParameters["WavefrontWidth"]
     dividerFortidInK = kernel["MatrixInstN"] * kernel["MatrixInstB"]
     numMIInput       = kernel["ProblemType"]["DataType"].numMIInput()
-    vgprPerInput     = int(numMIInput * numRegisters) #if not kernel["ProblemType"]["DataType"].isSingleComplex() else 1 #TODO ANT: specify "split real/imag"
+    vgprPerInput     = int(numMIInput * numRegisters)
     shiftPerElement  = int(numRegisters * 32)
     s_nop            = 0
 
@@ -5581,20 +5581,34 @@ class KernelWriterAssembly(KernelWriter):
           bStr     = vgpr("ValuB_X%u_I%u+%u+%u+%u" % (vgprBuffer_new, iui_new, b_new, vgprBuffer_new_offset, iui_new_offset), vgprPerInput)
           if kernel["ProblemType"]["DataType"].isSingleComplex():
             # override because complex mul is emulated by 4 mfma insts
-            neg_aImag = self.vgprPool.checkOut(1, "negate Ai")
+            # TODO: adopt component system
+            ccA = kernel["ProblemType"]["ComplexConjugateA"]
+            ccB = kernel["ProblemType"]["ComplexConjugateB"]
+            ccVgprs = [None]*4 # four terms that can be negated: [real0, real1, imag0, imag1]
+            ccInsts = [inst("//","")]*4
             accImOffset = self.AccVgprImagNumOffset(kernel)
-            aRealStr = vgpr("ValuA_X%u_I%u+%u+%u+%u" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), 1)
-            aImagStr = vgpr("ValuA_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), 1)
-            bRealStr = vgpr("ValuB_X%u_I%u+%u+%u+%u" % (vgprBuffer_new, iui_new, b_new, vgprBuffer_new_offset, iui_new_offset), 1)
-            bImagStr = vgpr("ValuB_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, b_new, vgprBuffer_new_offset, iui_new_offset), 1)
-            neg_aImagStr = inst("v_sub_f32", vgpr(neg_aImag), "0", aImagStr, "Ai = -Ai (negation)")
-            # TODO ANT: use asm cap to define mfma complex variant and f32 emulation fall back?
+            ar = vgpr("ValuA_X%u_I%u+%u+%u+%u"   % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), 1)
+            ai = vgpr("ValuA_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), 1)
+            br = vgpr("ValuB_X%u_I%u+%u+%u+%u"   % (vgprBuffer_new, iui_new, b_new, vgprBuffer_new_offset, iui_new_offset), 1)
+            bi = vgpr("ValuB_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, b_new, vgprBuffer_new_offset, iui_new_offset), 1)
             v_mfma = "v_mfma_f32_%ux%ux%u%s "%(kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], "f32")
-            imod.addInst(neg_aImagStr + v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart, accEnd, aRealStr, bRealStr, accStart, accEnd), "Cr += Ar*Br")
-            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, aImagStr, bRealStr, accStart+accImOffset, accEnd+accImOffset), "Ci += Ai*Br")
-            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart, accEnd, vgpr(neg_aImag), bImagStr, accStart, accEnd), "Cr += -Ai*Bi")
-            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, aRealStr, bImagStr, accStart+accImOffset, accEnd+accImOffset), "Ci += Ar*Bi")
-            self.vgprPool.checkIn(neg_aImag)
+            if (ccA and ccB) or (not ccA and not ccB):
+              ccVgprs[1] = self.vgprPool.checkOut(1, "negate r1")
+              ccInsts[1] = inst("v_sub_f32", vgpr(ccVgprs[1]), "0", ai, "")
+            if ccA:
+              ccVgprs[2] = self.vgprPool.checkOut(1, "negate i0")
+              ccInsts[2] = inst("v_sub_f32", vgpr(ccVgprs[2]), "0", ai, "")
+            if ccB:
+              ccVgprs[3] = self.vgprPool.checkOut(1, "negate i1")
+              ccInsts[3] = inst("v_sub_f32", vgpr(ccVgprs[3]), "0", ar, "")
+            imod.addInst("".join(ccInsts) + \
+                         v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart            , accEnd            , ar                                    , br, accStart            , accEnd            ), "Cr += Ar*Br")
+            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart            , accEnd            , vgpr(ccVgprs[1]) if ccVgprs[1] else ai, bi, accStart            , accEnd            ), "Cr += %sAi*Bi"%("-" if ccVgprs[1] else ""))
+            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, vgpr(ccVgprs[2]) if ccVgprs[2] else ai, br, accStart+accImOffset, accEnd+accImOffset), "Ci += %sAi*Br"%("-" if ccVgprs[2] else ""))
+            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, vgpr(ccVgprs[3]) if ccVgprs[3] else ar, bi, accStart+accImOffset, accEnd+accImOffset), "Ci += %sAr*Bi"%("-" if ccVgprs[3] else ""))
+
+            for v in ccVgprs:
+              if v is not None: self.vgprPool.checkIn(v)
           else:
             imod.addCode("v_mfma_f32_%ux%ux%u%s a[%u:%u], %s, %s, a[%u:%u]%s" \
                       % (kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], kernel["ProblemType"]["DataType"].toNameAbbrev(),
