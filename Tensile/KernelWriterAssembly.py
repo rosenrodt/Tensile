@@ -5584,8 +5584,8 @@ class KernelWriterAssembly(KernelWriter):
             # TODO: adopt component system
             ccA = kernel["ProblemType"]["ComplexConjugateA"]
             ccB = kernel["ProblemType"]["ComplexConjugateB"]
-            ccVgprs = [None]*4 # four terms that can be negated: [real0, real1, imag0, imag1]
-            ccInsts = [inst("//","")]*4
+            ccVgprs = [None]*3 # three terms that can be negated: [real1, imag0, imag1]
+            ccInsts = [None]*3
             accImOffset = self.AccVgprImagNumOffset(kernel)
             ar = vgpr("ValuA_X%u_I%u+%u+%u+%u"   % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), 1)
             ai = vgpr("ValuA_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, a_new, vgprBuffer_new_offset, iui_new_offset), 1)
@@ -5593,19 +5593,19 @@ class KernelWriterAssembly(KernelWriter):
             bi = vgpr("ValuB_X%u_I%u+%u+%u+%u+1" % (vgprBuffer_new, iui_new, b_new, vgprBuffer_new_offset, iui_new_offset), 1)
             v_mfma = "v_mfma_f32_%ux%ux%u%s "%(kernel["MatrixInstM"], kernel["MatrixInstN"], kernel["MatrixInstK"], "f32")
             if (ccA and ccB) or (not ccA and not ccB):
-              ccVgprs[1] = self.vgprPool.checkOut(1, "negate r1")
-              ccInsts[1] = inst("v_sub_f32", vgpr(ccVgprs[1]), "0", ai, "")
+              ccVgprs[0] = self.vgprPool.checkOut(1, "negate r1")
+              ccInsts[0] = inst("v_sub_f32", vgpr(ccVgprs[0]), "0", ai, "Ai=-Ai")
             if ccA:
-              ccVgprs[2] = self.vgprPool.checkOut(1, "negate i0")
-              ccInsts[2] = inst("v_sub_f32", vgpr(ccVgprs[2]), "0", ai, "")
+              ccVgprs[1] = self.vgprPool.checkOut(1, "negate i0")
+              ccInsts[1] = inst("v_sub_f32", vgpr(ccVgprs[1]), "0", ai, "Ai=-Ai")
             if ccB:
-              ccVgprs[3] = self.vgprPool.checkOut(1, "negate i1")
-              ccInsts[3] = inst("v_sub_f32", vgpr(ccVgprs[3]), "0", ar, "")
-            imod.addInst("".join(ccInsts) + \
+              ccVgprs[2] = self.vgprPool.checkOut(1, "negate i1")
+              ccInsts[2] = inst("v_sub_f32", vgpr(ccVgprs[2]), "0", ar, "Ar=-Ar")
+            imod.addInst("".join([inst for inst in ccInsts if inst is not None]) + \
                          v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart            , accEnd            , ar                                    , br, accStart            , accEnd            ), "Cr += Ar*Br")
-            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart            , accEnd            , vgpr(ccVgprs[1]) if ccVgprs[1] else ai, bi, accStart            , accEnd            ), "Cr += %sAi*Bi"%("-" if ccVgprs[1] else ""))
-            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, vgpr(ccVgprs[2]) if ccVgprs[2] else ai, br, accStart+accImOffset, accEnd+accImOffset), "Ci += %sAi*Br"%("-" if ccVgprs[2] else ""))
-            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, vgpr(ccVgprs[3]) if ccVgprs[3] else ar, bi, accStart+accImOffset, accEnd+accImOffset), "Ci += %sAr*Bi"%("-" if ccVgprs[3] else ""))
+            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart            , accEnd            , vgpr(ccVgprs[0]) if ccVgprs[0] else ai, bi, accStart            , accEnd            ), "Cr += %sAi*Bi"%("-" if ccVgprs[0] else ""))
+            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, vgpr(ccVgprs[1]) if ccVgprs[1] else ai, br, accStart+accImOffset, accEnd+accImOffset), "Ci += %sAi*Br"%("-" if ccVgprs[1] else ""))
+            imod.addInst(v_mfma + "a[%u:%u], %s, %s, a[%u:%u]"%(accStart+accImOffset, accEnd+accImOffset, vgpr(ccVgprs[2]) if ccVgprs[2] else ar, bi, accStart+accImOffset, accEnd+accImOffset), "Ci += %sAr*Bi"%("-" if ccVgprs[2] else ""))
 
             for v in ccVgprs:
               if v is not None: self.vgprPool.checkIn(v)
