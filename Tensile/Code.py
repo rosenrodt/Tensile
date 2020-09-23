@@ -38,6 +38,16 @@ class Item:
   def countType(self,ttype):
     return int(isinstance(self, ttype))
 
+  def prettyPrint(self, indent=""):
+    for idx, i in enumerate(self.itemList):
+      print("%s[%u] "%(indent,idx), end="")
+      if isinstance(i, str):
+        print(indent+'"', str(i).strip('\n'), '"')
+      elif isinstance(i, Module):
+        i.prettyPrint(indent+"-")
+      else: # Inst
+          print("%s: [ %s ]" % \
+              (i.__class__.__name__, str(i).strip('\n')))
 
 class Module(Item):
   """
@@ -110,15 +120,11 @@ class Module(Item):
     self.addCode(TextBlock(text))
 
   def prettyPrint(self,indent=""):
-    print("%sModule %s:"% (indent,self.name))
-    for i in self.itemList:
-      if isinstance(i, Module):
-        i.prettyPrint(indent+"  ")
-      elif isinstance(i, str):
-        print(indent, '"', str(i).strip('\n'), '"')
-      else: # Inst
-          print(indent, "%s: [ %s ]" % \
-              (i.__class__.__name__, str(i).strip('\n')))
+    print("Module %s:"% (self.name))
+    super().prettyPrint(indent)
+
+  def print(self):
+    print(self)
 
   def countType(self,ttype):
     """
@@ -246,6 +252,9 @@ class WaitCnt (Module):
     self.lgkmcnt = lgkmcnt
     self.vmcnt   = vmcnt
     self.comment = comment
+
+    # let this derived class play nicely with Module.prettyPrint()
+    self.__dict__.update(self.instructions().__dict__)
 
   def instructions(self):
     rv = Module()
