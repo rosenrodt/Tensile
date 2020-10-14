@@ -4420,8 +4420,13 @@ class KernelWriterAssembly(KernelWriter):
   # Local Write Addresses: Unroll Assignment A/B
   ##############################################################################
   def lwaUnrollAssignment(self, kernel, tP):
-    return self.comment1("lwaUnrollAssignment%s = %s" % (tP["tensorChar"], \
-        vgpr(tP["gpr"]["uReg2" if kernel["GlobalSplitU"] > 1 else "uReg"])))
+    kStr = ""
+    uReg = tP["gpr"]["uReg2" if kernel["GlobalSplitU"] > 1 else "uReg"]
+    kStr += self.comment1("lwaUnrollAssignment%s = %s" % (tP["tensorChar"], vgpr(uReg)))
+    if kernel["DepthULdsDivisor"] > 1 and kernel["UnrollMajorLDS%s" % tP["tensorChar"]]:
+      kStr += self.comment1("Each thread writes 1/%u of data to LDS"%kernel["DepthULdsDivisor"])
+      kStr += inst("v_lshrrev_b32", vgpr(uReg), log2(kernel["DepthULdsDivisor"]), vgpr(uReg), "")
+    return kStr
 
   ##############################################################################
   # Local Write Addresses: First Offset A/B
@@ -4442,9 +4447,9 @@ class KernelWriterAssembly(KernelWriter):
 
     if dotInterleave == 1:
       if kernel["UnrollMajorLDS%s" % tc]:
-        lds_stride = kernel["DepthU"] + LdsPad
+        lds_stride = kernel["_DepthULds"] + LdsPad
         kStr += inst("v_mul_u32_u24", vgpr(destVgpr), hex(lds_stride), vgpr(tP["gpr"]["lwoT"]), \
-            "lw%s%s**(DepthU + PAD)"%(tP["tensorChar"], self.unrollChar))
+            "lw%s%s**(DepthULds + PAD)"%(tP["tensorChar"], self.unrollChar))
         kStr += inst("_v_add_lshl_u32", vgpr(destVgpr), vgpr(uReg), vgpr(destVgpr), hex(log2(tP["bpe"])), \
             "lwFO%s = (lw%s%s + lw%s%s*(DepthU+PAD))*bpe" % (tc, tc, tc, tc, self.unrollChar) )
       else:
@@ -4648,7 +4653,7 @@ class KernelWriterAssembly(KernelWriter):
     # strider for each type of index
     umlds            = kernel["UnrollMajorLDS%s" % tP["tensorChar"]]
     mt               = kernel["MacroTile%u" % tIdx]
-    strideTile       = kernel["DepthU"] + LdsPad if umlds else 1
+    strideTile       = kernel["_DepthULds"] + LdsPad if umlds else 1
     strideK          = inputPerThread            if umlds else (mt + LdsPad) * inputPerThread
     strideBlock      = kernel["MatrixInstM"] * strideTile
     strideWave       = kernel["MatrixInstM"] * num1DBlocks * strideTile
@@ -7068,7 +7073,7 @@ class KernelWriterAssembly(KernelWriter):
   #   sPara : component index of the par vector (0...nrcv)
   # Outputs:
   #   offsetBytes : Offset in bytes for the ds_write instruction
-  #   i : ?
+  #   i : i-th instruction
   #   comment : Comment with the text version of the formula
   #############################################################################
   def calculateLdsWriteOffset(self, perp, para, sPerp, sPara, kernel, tP, localWriteCnt):
@@ -7117,7 +7122,7 @@ class KernelWriterAssembly(KernelWriter):
     # print("0lscaOffset", lscaOffset)
 
     LdsPad = kernel["LdsPad%s"%tc] if kernel["LdsBlockSizePerPad%s"%tc] == 0 else 0
-    lds_stride = (kernel["DepthU"] + LdsPad) if kernel["UnrollMajorLDS%s" % tP["tensorChar"]] \
+    lds_stride = (kernel["_DepthULds"] + LdsPad) if kernel["UnrollMajorLDS%s" % tP["tensorChar"]] \
             else (kernel[tP["mt"]] + LdsPad)
 
     if tP["tlu"] != kernel["UnrollMajorLDS%s" % tP["tensorChar"]]:
@@ -7167,7 +7172,7 @@ class KernelWriterAssembly(KernelWriter):
   ##############################################################################
   # Local Write: Do It A/B
   ##############################################################################
-  def localWriteDo(self, kernel, tP):
+  def localWriteDo(self, kernel, tP, subLdsIter):
     if not self.do["LocalWrite"]: return ""
     tc = tP["tensorChar"]
     self.localWriteDoCnt += 1
@@ -7243,10 +7248,14 @@ class KernelWriterAssembly(KernelWriter):
               elif tP["wuc"] == tP["grcv"]:
                 sPerp = s
 
-            # print("perp:{0} para:{1} sPerp:{2} sPara:{3} loopCnt:{4}".format(perp,para,sPerp,sPara,loopCnt))
+            #print("perp:{}/{} para:{}/{} sPerp:{} sPara:{} loopCnt:{}".format(perp,tP["nrp"],para,tP["nrc"],sPerp,sPara,loopCnt))
             (offset, i, comment) = self.calculateLdsWriteOffset(perp, para, sPerp, sPara, kernel, tP, loopCnt)
-            # print("offset: %u"%(offset))
-            g2lIdx = i*blockWidth
+
+            if tP["tlu"]:
+              g2lIdx = i * blockWidth
+            else: # interleave index for TLU=0 case
+              g2lIdx = (i * kernel["DepthULdsDivisor"] + subLdsIter) * blockWidth
+              #print("subLdsIter=%u, g2lIdx = %u, offset: %u"%(subLdsIter, g2lIdx, offset))
 
             paramList = []
             paramList.append(vgpr(lwa))
@@ -7585,7 +7594,7 @@ class KernelWriterAssembly(KernelWriter):
     tileStride       = 1
     UnrollStride     = kernel["MacroTile%s" % tP["tensorChar"]] + LdsPad
     if kernel["UnrollMajorLDS%s" % tP["tensorChar"]]:
-      tileStride     = kernel["DepthU"] + LdsPad
+      tileStride     = kernel["_DepthULds"] + LdsPad
       UnrollStride   = 1
 
     numVectorsPerTile = kernel["MIWaveTile"][tIdx]

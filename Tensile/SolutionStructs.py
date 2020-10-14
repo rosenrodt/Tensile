@@ -2600,6 +2600,7 @@ class Solution:
 
     if userDepthU < 0:
       depthU     = 2
+      depthULds  = 2
       maxDepthU  = globalParameters["MaxDepthU"]
       numOfWaves = state["NumThreads"] // globalParameters["WavefrontWidth"]
       if state["ProblemType"]["TLUA"] and state["WaveSeparateGlobalReadA"]:
@@ -2608,22 +2609,30 @@ class Solution:
         depthU = max(depthU, numOfWaves)
     else:
       depthU = userDepthU
+      depthULds = userDepthU//state["DepthULdsDivisor"]
       maxDepthU = userDepthU
+
+    state["_DepthULds"] = state["DepthU"]//state["DepthULdsDivisor"] # internal
 
     ########################################
     # Search DepthU
+    # Inputs:
+    #  - depthU, userDepthU, state["LocalSplitU"], state["InnerUnroll"], state["MacroTile0/1"], state["GlobalReadVectorWidth"]
+    #  - state["MatrixInstK"], ...
+    # Outputs:
+    #  - totalVectorsCoalescedA, totalVectorsCoalescedB, totalElementsPerpA, totalElementsPerpB, state["DepthU"]
     ########################################
     while True: # exit criteria at end
       validDepthU = True
       # peek LoopIters
-      loopIters = (depthU // state["LocalSplitU"]) // state["InnerUnroll"]
+      loopIters = (depthULds // state["LocalSplitU"]) // state["InnerUnroll"]
       if "MatrixInstK" in state:
         loopIters //= state["MatrixInstK"]
       if loopIters < 1:
         reject(state, "LoopIters need to greater than 0")
         return
 
-      if (depthU % ((state["PrefetchLocalRead"]%loopIters)+1)) != 0:
+      if (depthULds % ((state["PrefetchLocalRead"]%loopIters)+1)) != 0:
         validDepthU = False
 
       # how many elements to load
@@ -2666,7 +2675,7 @@ class Solution:
               validDepthU = False
 
       if validDepthU and state["KernelLanguage"] == "Assembly" \
-         and (state["ProblemType"]["DataType"].isHalf() \
+        and (state["ProblemType"]["DataType"].isHalf() \
               or state["ProblemType"]["DataType"].isBFloat16()):
         if globalParameters["ArchCaps"][globalParameters["CurrentISA"]]["HasEccHalf"]:
           if state["GlobalLoadVectorWidthA"] == 1 or state["GlobalLoadVectorWidthB"] == 1:
@@ -2679,17 +2688,17 @@ class Solution:
       totalVectorsA = totalElementsA // state["GlobalReadVectorWidth"]
       totalVectorsB = totalElementsB // state["GlobalReadVectorWidth"]
 
-      if 0:
-        print("info:", pvar(state, "NumThreads"), pvar(state, "DepthU"), \
-                       pvar(state, "ThreadTile0"), pvar(state, "ThreadTile1"), \
-                       "WG=%ux%u" % (state["WorkGroup"][0], state["WorkGroup"][1]), \
-                       pvar(state, "MacroTileA"), pvar(state, "MacroTileB"))
-        print("info: totalElementsCoalescedA=", totalElementsCoalescedA, \
+      if 1:
+        print("info:", pvar(state, "NumThreads"), pvar(state, "DepthU"), pvar(state, "DepthULdsDivisor"),
+                      "TT=%ux%u" % (state["ThreadTile0"], state["ThreadTile1"]),
+                      "WG=%ux%u" % (state["WorkGroup"][0], state["WorkGroup"][1]),
+                      "MT=%ux%u" % (state["MacroTile0"], state["MacroTile1"]))
+        print("info: totalElementsCoalescedA=", totalElementsCoalescedA,
               " totalVectorsCoalescedA=", totalVectorsCoalescedA, " totalVectorsA=", totalVectorsA)
-        print("info: totalElementsCoalescedB=", totalElementsCoalescedB, \
+        print("info: totalElementsCoalescedB=", totalElementsCoalescedB,
               " totalVectorsCoalescedB=", totalVectorsCoalescedB, " totalVectorsB=", totalVectorsB)
-        print ("info", pvar(state, "VectorWidth"))
-                #, pvar(state, "GlobalLoadVectorWidthA"), pvar(state, "GlobalLoadVectorWidthB"))
+        print("info", pvar(state, "VectorWidth")
+                , pvar(state, "GlobalLoadVectorWidthA"), pvar(state, "GlobalLoadVectorWidthB"))
 
       #if state["ProblemType"]["DataType"].isHalf() \
       #    and (state["GlobalLoadVectorWidthA"] == 1 \
@@ -2726,9 +2735,11 @@ class Solution:
         if userDepthU < -3: # for every int below -3, use next doubled value
           userDepthU += 1
           depthU *= 2
+          depthULds *= 2
           continue
         else: # use this found value
           state["DepthU"] = depthU
+          state["_DepthULds"] = depthULds
           break
 
       # this depthU not valid
@@ -2736,6 +2747,7 @@ class Solution:
         # keep looking
         if depthU < maxDepthU:
           depthU += 2
+          depthULds *= 2
           continue
         # give up
         else:
@@ -2744,6 +2756,9 @@ class Solution:
     ########################################
     # end DepthU loop
     ########################################
+
+    print("NOTE ANT: DepthU = %u"%state["DepthU"])
+    print("NOTE ANT: _DepthULds = %u"%state["_DepthULds"])
 
     assert(state["DepthU"]> 0)
 
@@ -2833,8 +2848,8 @@ class Solution:
     if state["LdsBlockSizePerPad"] == -1:
       if state["MatrixInstruction"] and state["TransposeLDS"]:
         state["LdsBlockSizePerPad"] = 128
-        if state["DepthU"]*state["ProblemType"]["DataType"].numBytes() > state["LdsBlockSizePerPad"]:
-          state["LdsBlockSizePerPad"] = int(2**(math.ceil(math.log(state["DepthU"]*state["ProblemType"]["DataType"].numBytes(), 2))))
+        if state["_DepthULds"]*state["ProblemType"]["DataType"].numBytes() > state["LdsBlockSizePerPad"]:
+          state["LdsBlockSizePerPad"] = int(2**(math.ceil(math.log(state["_DepthULds"]*state["ProblemType"]["DataType"].numBytes(), 2))))
       else:
         state["LdsBlockSizePerPad"] = 0
 
@@ -2845,14 +2860,14 @@ class Solution:
       if state["LdsBlockSizePerPadA"]:
         if not state["UnrollMajorLDSA"]:
           reject(state, "didn't support LdsBlockSizePerPadA on tile major LDS yet")
-        if state["LdsBlockSizePerPadA"] < state["DepthU"]*state["ProblemType"]["DataType"].numBytes():
-          reject(state, "reject: DepthULds %u x bpe > LdsBlockSizePerPadA %u" % (state["DepthU"], state["LdsBlockSizePerPad"]))
+        if state["LdsBlockSizePerPadA"] < state["_DepthULds"]*state["ProblemType"]["DataType"].numBytes():
+          reject(state, "reject: DepthULds %u x bpe > LdsBlockSizePerPadA %u" % (state["_DepthULds"], state["LdsBlockSizePerPad"]))
 
       if state["LdsBlockSizePerPadB"]:
         if not state["UnrollMajorLDSB"]:
           reject(state, "didn't support LdsBlockSizePerPadB on tile major LDS yet")
-        if state["LdsBlockSizePerPadB"] < state["DepthU"]*state["ProblemType"]["DataType"].numBytes():
-          reject(state, "reject: DepthULds %u x bpe > LdsBlockSizePerPadB %u" % (state["DepthU"], state["LdsBlockSizePerPad"]))
+        if state["LdsBlockSizePerPadB"] < state["_DepthULds"]*state["ProblemType"]["DataType"].numBytes():
+          reject(state, "reject: DepthULds %u x bpe > LdsBlockSizePerPadB %u" % (state["_DepthULds"], state["LdsBlockSizePerPad"]))
     else:
       if state["UnrollMajorLDSA"] or state["UnrollMajorLDSB"]:
         reject(state, "didn't support UnrollMajorLDS in VALU mode yet")
@@ -2898,23 +2913,23 @@ class Solution:
     ldsAlign = int(64 / state["ProblemType"]["DataType"].numRegisters())
 
     if state["UnrollMajorLDSA"]:
-      ldsNumElementsA = (state["DepthU"] + state["LdsPadA"]) * state["MacroTile0"]
+      ldsNumElementsA = (state["_DepthULds"] + state["LdsPadA"]) * state["MacroTile0"]
       padInterval = state["LdsBlockSizePerPadA"] // bpeAB
       if padInterval != 0:
-        ldsNumElementsA = int((state["DepthU"] * state["MacroTile0"]) / padInterval * (padInterval + state["LdsPadA"]))
+        ldsNumElementsA = int((state["_DepthULds"] * state["MacroTile0"]) / padInterval * (padInterval + state["LdsPadA"]))
       ldsNumElementsAlignedA = roundUpToNearestMultiple(ldsNumElementsA, ldsAlign)
     else:
-      ldsNumElementsA = state["DepthU"] * (state["MacroTile0"] + state["LdsPadA"])
+      ldsNumElementsA = state["_DepthULds"] * (state["MacroTile0"] + state["LdsPadA"])
       ldsNumElementsAlignedA = roundUpToNearestMultiple(ldsNumElementsA, ldsAlign)
 
     if state["UnrollMajorLDSB"]:
-      ldsNumElementsB = (state["DepthU"] + state["LdsPadB"]) * state["MacroTile1"]
+      ldsNumElementsB = (state["_DepthULds"] + state["LdsPadB"]) * state["MacroTile1"]
       padInterval = state["LdsBlockSizePerPadB"] // bpeAB
       if padInterval != 0:
-        ldsNumElementsB = int((state["DepthU"] * state["MacroTile1"]) / padInterval * (padInterval + state["LdsPadB"]))
+        ldsNumElementsB = int((state["_DepthULds"] * state["MacroTile1"]) / padInterval * (padInterval + state["LdsPadB"]))
       ldsNumElementsAlignedB = roundUpToNearestMultiple(ldsNumElementsB, ldsAlign)
     else:
-      ldsNumElementsB = state["DepthU"] * (state["MacroTile1"] + state["LdsPadB"])
+      ldsNumElementsB = state["_DepthULds"] * (state["MacroTile1"] + state["LdsPadB"])
       ldsNumElementsAlignedB = roundUpToNearestMultiple(ldsNumElementsB, ldsAlign)
 
     # todo, can the alignment be a power of 2?
@@ -3019,9 +3034,9 @@ class Solution:
       return
 
     # LoopUnroll  = DepthU / LocalSplitU
-    if "LocalSplitU" in state and "DepthU" in state:
-      state["LoopUnroll"] = state["DepthU"] // state["LocalSplitU"]
-    if state["LoopUnroll"] * state["LocalSplitU"] != state["DepthU"]:
+    if "LocalSplitU" in state and "_DepthULds" in state:
+      state["LoopUnroll"] = state["_DepthULds"] // state["LocalSplitU"]
+    if state["LoopUnroll"] * state["LocalSplitU"] != state["_DepthULds"]:
       state["Valid"] = False
     if state["KernelLanguage"] != "Assembly" and state["InnerUnroll"] != 1:
       reject(state, "InnerUnroll only supported on assembly")

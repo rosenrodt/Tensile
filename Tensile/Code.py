@@ -25,6 +25,13 @@ import ctypes
 # Global to print module names around strings
 printModuleNames = 0
 
+def printItemList(listOfItems, name="__unnamed__"):
+  print("begin {}".format(name))
+  for i,item in enumerate(listOfItems):
+    item = list(item) if isinstance(item, tuple) else [item]
+    for e in item: print("{}[{}]\n{}".format(name,i,e))
+  print("end {}".format(name))
+
 class Item:
   """
   Base class for Modules, Instructions, etc
@@ -213,6 +220,9 @@ class TextBlock(Item):
   def __str__(self):
     return self.text
 
+class Placeholder(Module):
+  def __init__(self, *args):
+    super().__init__("Placeholder")
 
 class Inst(Item):
   """
