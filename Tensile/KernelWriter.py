@@ -302,6 +302,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
     if kernel["1LDSBuffer"]:
       barrier = Code.Module()
+      barrier.addComment0("1 LDS buffer: read-sync-write")
       barrier.addInst("s_waitcnt lgkmcnt(0)","")
       barrier.addInst("s_barrier","")
       if self.localWriteACode.items():
@@ -415,8 +416,8 @@ class KernelWriter(metaclass=abc.ABCMeta):
             readsToWaitNGLL = readsToWaitNGLL - 1
             # TODO - gfx9 supports higher max VMCNT
             if 1:
-              if subLdsIter < kernel["DepthULdsDivisor"]-1: # don't wait except for in last subLdsLoop
-                pass
+              if subLdsIter < kernel["DepthULdsDivisor"]-1:
+                imod.addComment0("no wait vmcnt except for in the last subLdsLoop")
               else:
                 imod.addCode(Code.WaitCnt(self.version, -1, min(maxVmcnt, readsToWait), \
                   "wait for global read before writing to local"))
@@ -1214,7 +1215,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
     kl = []
     pflr     = self.numItersPLR
     localWriteEndIter = kernel["LoopIters"] - self.numItersPLR - 1
-
+    print("Debug: %s noLoadLoop: localWriteEndIter = %u"%(self.getKernelName(kernel), localWriteEndIter))
     if isNGLL:
       kl.append(self.comment3(" NoGlobalLoadLoop - Begin"))
       self.perIterLocalWriteCode = self.perIterLocalWriteCodeNGLL
@@ -1245,9 +1246,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
     for uIdx in range(0, kernel["LoopIters"]*kernel["DepthULdsDivisor"]):
       u = uIdx % kernel["LoopIters"] # u: u-index in compute loop (against the notion of global read loop)
       subLdsIter = uIdx // kernel["LoopIters"]
-
+      isLastLoop = (subLdsIter == kernel["DepthULdsDivisor"] -1 ) and not isNGLL
       if u == 0:
-        if subLdsIter==0: # if at start of subloop, update local write code
+        if subLdsIter==0 and kernel["DepthULdsDivisor"]>1: # if at start of subloop, update local write code
           self.localWriteACode = self.localWriteDo(kernel, tensorParametersA, (subLdsIter+1)%kernel["DepthULdsDivisor"])  # local write in loopcnt N targets data for loopcnt N+1
           self.localWriteBCode = self.localWriteDo(kernel, tensorParametersB, (subLdsIter+1)%kernel["DepthULdsDivisor"])
         else:
@@ -1269,7 +1270,13 @@ class KernelWriter(metaclass=abc.ABCMeta):
           isSwapAndResetLwoIter = (u == self.lwEndMfmaIndex//(self.numMfmaPerIter))
 
       extraComment = ""
-      if isNGLL:
+      # import pdb; pdb.set_trace()
+      if isLastLoop:
+        extraComment += " (isLastLoop)"
+      else:
+        extraComment += " (isNotLastLoop)"
+      # if isNGLL:
+      if not isLastLoop: #isNGLL:
         if isResetLroIter:
             extraComment += " (reset local read pointers iteration) "
         if isSwapAndResetLwoIter:
@@ -1292,12 +1299,15 @@ class KernelWriter(metaclass=abc.ABCMeta):
         # reads for current loop are done in previous iteration because of wider local read
         doReadA = (u < kernel["LoopIters"]/self.numIterPerCoalescedReadA - self.numItersPLR)
         doReadB = (u < kernel["LoopIters"]/self.numIterPerCoalescedReadB - self.numItersPLR)
-        doReadA = doReadA or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
-        doReadB = doReadB or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
-        if isNGLL: # TODO ANT: check
+        if not isLastLoop: #isNGLL: # TODO ANT: check
           # reads for next loop
           doReadA = doReadA or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
           doReadB = doReadB or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
+        # reads for next loop
+        # doReadA = doReadA or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
+        # doReadB = doReadB or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
+        doReadA = doReadA and (subLdsIter < kernel["DepthULdsDivisor"])
+        doReadB = doReadB and (subLdsIter < kernel["DepthULdsDivisor"])
         for iui in range(0,kernel["InnerUnroll"]):
           doReadA = doReadA and iui*self.numReadsIterCoalescedA < kernel["InnerUnroll"]
           doReadB = doReadB and iui*self.numReadsIterCoalescedB < kernel["InnerUnroll"]
@@ -1319,7 +1329,8 @@ class KernelWriter(metaclass=abc.ABCMeta):
               localReads.addText(self.comment("local read increment b"))
               localReads.addText(self.localReadInc(kernel, iui, tensorParametersB))
 
-      if isNGLL:
+      # if isNGLL:
+      if not isLastLoop: #isNGLL:
         if kernel["PrefetchGlobalRead"]:
           # put barrier at localWriteEndIter+1
           if u == localWriteEndIter+1 or (u == (localWriteEndIter+1)%kernel["LoopIters"] and kernel["ScheduleIterAlg"] == 2):
@@ -1342,9 +1353,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
             if self.enable["LocalRead"]:
               # Swap, reset, or increment the LRO:
               pointerLRCode.addText(self.comment("local read swap offsets a"))
-              pointerLRCode.addText(self.localReadSwapOffsets(kernel, 0, tensorParametersA))
+              pointerLRCode.addText(self.localReadSwapOffsets(kernel, kernel["ExpandPointerSwap"], tensorParametersA))
               pointerLRCode.addText(self.comment("local read swap offsets b"))
-              pointerLRCode.addText(self.localReadSwapOffsets(kernel, 0, tensorParametersB))
+              pointerLRCode.addText(self.localReadSwapOffsets(kernel, kernel["ExpandPointerSwap"], tensorParametersB))
 
         if isResetLroIter: # ResetLroIter
           if self.enable["LocalRead"]:
@@ -1353,21 +1364,21 @@ class KernelWriter(metaclass=abc.ABCMeta):
             pointerLRCode.addText(self.comment("local read init pointers b"))
             pointerLRCode.addText(self.localReadInitPointers(kernel, tensorParametersB))
 
-      # put barrier at localWriteEndIter+1
-      if kernel["PrefetchGlobalRead"]:
-        if u == localWriteEndIter+1:
-          if self.enable["Wait"]:
-            waitLWCode.addCode(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, \
-                "3wait for local write"))
-          if self.enable["Sync"]:
-            syncCode.addCode(self.syncThreads(kernel))
+      # # put barrier at localWriteEndIter+1
+      # if kernel["PrefetchGlobalRead"]:
+      #   if u == localWriteEndIter+1:
+      #     if self.enable["Wait"]:
+      #       waitLWCode.addCode(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, \
+      #           "3wait for local write"))
+      #     if self.enable["Sync"]:
+      #       syncCode.addCode(self.syncThreads(kernel))
 
-      if isResetLroIter: # ResetLroIter
-        if self.enable["LocalRead"]:
-          localReads.addText(self.comment("local read init pointers a"))
-          localReads.addText(self.localReadInitPointers(kernel, tensorParametersA))
-          localReads.addText(self.comment("local read init pointers b"))
-          localReads.addText(self.localReadInitPointers(kernel, tensorParametersB))
+      # if isResetLroIter: # ResetLroIter
+      #   if self.enable["LocalRead"]:
+      #     localReads.addText(self.comment("local read init pointers a"))
+      #     localReads.addText(self.localReadInitPointers(kernel, tensorParametersA))
+      #     localReads.addText(self.comment("local read init pointers b"))
+      #     localReads.addText(self.localReadInitPointers(kernel, tensorParametersB))
 
       if self.enable["Wait"]:
         dataAtIter = u - self.numItersPLR

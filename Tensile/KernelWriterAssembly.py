@@ -6126,6 +6126,12 @@ class KernelWriterAssembly(KernelWriter):
             kStr += self.localReadSwapOffsets(kernel, expand, self.tPA)
             kStr += self.comment("local read swap offsets b")
             kStr += self.localReadSwapOffsets(kernel, expand, self.tPB)
+          # else:
+          # # TODO ANT: double check this
+          # # Reset the internal LDS bank state after optimized no load loop so that
+          # # code gen would come clean when generating oridinary no load loop later
+          #   self.localReadSwapOffsets(kernel, expand, self.tPA)
+          #   self.localReadSwapOffsets(kernel, expand, self.tPA)
 
           kStr += self.comment1("Stores for OptNLL")
           kStr += self.endSummation(kernel)
@@ -11789,7 +11795,9 @@ class KernelWriterAssembly(KernelWriter):
       kStr = ""
       if self.archCaps["SeparateVscnt"]:
         kStr += inst("s_waitcnt_lgkmcnt", "null", "0", "extra navi wait")
-      elif self.archCaps["Waitcnt0Disabled"] and not kernel["ScheduleIterAlg"] == 2 and not kernel["PrefetchGlobalRead"] == 2:
+      elif kernel["DepthULdsDivisor"] > 1 or kernel["ScheduleIterAlg"] == 2 or kernel["PrefetchGlobalRead"] == 2:
+        kStr += "// Skip force waitcnt0" + self.endLine
+      elif self.archCaps["Waitcnt0Disabled"]:
         kStr += inst("s_waitcnt", "lgkmcnt(0) & vmcnt(0)", "force waitcnt0" )
 
       kStr += self.indent + self.syncStr + " //" + comment + self.endLine
