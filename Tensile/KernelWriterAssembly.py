@@ -5175,14 +5175,11 @@ class KernelWriterAssembly(KernelWriter):
       tmpSgpr = self.getTmpSgpr(4).idx()
       if self.prefetchAcrossPersistent0:
         loopCounterName = "TailLoopCounter"
-        if kernel["EnableMatrixInstruction"] and \
-           kernel["AssertSummationElementMultiple"] % kernel["MatrixInstK"] != 0:
-          numRemainderSumElements = "NumRemainderSumElements%s"%loopChar
       else:
         loopCounterName = self.loopCounterName(kernel, loopIdx)
-        if kernel["EnableMatrixInstruction"] and \
-           kernel["AssertSummationElementMultiple"] % kernel["MatrixInstK"] != 0:
-          numRemainderSumElements = "NumRemainderSumElements%s"%loopChar
+      if kernel["EnableMatrixInstruction"] and \
+          kernel["AssertSummationElementMultiple"] % kernel["MatrixInstK"] != 0:
+        numRemainderSumElements = "NumRemainderSumElements%s"%loopChar
       kStr += "\n"
       if kernel["SuppressNoLoadLoop"]:
         # If the tail loop is suppressed, then final iterations will have moved the Srd base forward
