@@ -2062,18 +2062,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
       # as tail loop iterate LDS read address one unit of K (or MatInstK) at a time
       from copy import deepcopy
       kernelOrig = deepcopy(kernel)
-      # print("tensor param A lsc={}, lsp={}".format(kernelOrig[tensorParametersA["lsc"]], kernelOrig[tensorParametersA["lsp"]]))
-      # print("tensor param B lsc={}, lsp={}".format(kernelOrig[tensorParametersB["lsc"]], kernelOrig[tensorParametersB["lsp"]]))
-      # kernel["LSCA"] = kernelOrig["LSCA"]//kernelOrig["DepthULdsDivisor"]
-      # kernel["LSCB"] = kernelOrig["LSCB"]//kernelOrig["DepthULdsDivisor"]
-      # kernel["LVCA"] = kernelOrig["LVCA"]//kernelOrig["DepthULdsDivisor"]
-      # kernel["LVCB"] = kernelOrig["LVCB"]//kernelOrig["DepthULdsDivisor"]
-      # kernel["DepthULdsDivisor"] = 1
-      # kernel["DepthU"] = kernelOrig["DepthU"]//kernelOrig["DepthULdsDivisor"]
-      # assert kernelOrig["DepthU"] == 64
+      self.recalcLRCode = None
       for subLdsIter in range(0, kernelOrig["DepthULdsDivisor"]):
         kl.append(self.comment("Recalc local read/write offsets"))
-        kl.append(self.recalcLocalReadWriteAddresses(kernel, tensorParametersA, tensorParametersB, subLdsIter))
+        kl.append(self.recalcLocalReadWriteAddressesAB(kernel, tensorParametersA, tensorParametersB, subLdsIter))
         if self.enable["LocalWrite"]:
           # tail: local write
           kl.append(self.localWriteInitPointers(kernel, tensorParametersA))
@@ -2147,7 +2139,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
       # restore kernel params
       kernel = kernelOrig
-      assert kernel["DepthU"] == 64
 
     kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
     # extra summation loops: global increment and close
@@ -3060,19 +3051,25 @@ class KernelWriter(metaclass=abc.ABCMeta):
     return ""
 
   ##############################################################################
-  # Recalculate addresses A/B
+  # Recalculate local read addresses A/B
   ##############################################################################
-  def recalcLocalReadWriteAddresses_impl(self, kernel, tP, subLdsIter):
+  @abc.abstractmethod
+  def recalcLocalReadAddressesAB(self, kernel):
+    return ""
+
+  ##############################################################################
+  # Recalculate local write addresses A/B
+  ##############################################################################
+  def recalcLocalWriteAddresses(self, kernel, tP, subLdsIter):
     kStr = ""
 
-    backUpInst = getattr(self, "localWriteInstructionIdx{}".format(tP["tensorChar"]))
+    # backUpInst = getattr(self, "localWriteInstructionIdx{}".format(tP["tensorChar"])) # 
     lwvw = getattr(self, "localWriteWidth{}".format(tP["tensorChar"]))
     newInstIdx = self.selectMemoryInstruction("LocalWrite", lwvw*kernel["DepthULdsDivisor"], \
         kernel["LocalWrite2A"], \
         self.localWrite2CoalescedA, self.localWrite2PerpendicularA,
         [self.localWriteStrideTileA, self.localWriteStrideUnrollA] )
-    newInst = self.memoryInstructions[self.version]["LocalWrite"][newInstIdx]
-    tP["localWriteInstruction"] = newInst
+    tP["localWriteInstruction"] = self.memoryInstructions[self.version]["LocalWrite"][newInstIdx]
 
     # global read tile assignment
     kStr += self.graTileAssignment(kernel, tP)
@@ -3094,7 +3091,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
     return kStr
 
-  def recalcLocalReadWriteAddresses(self, kernel, tPA, tPB, subLdsIter):
+  def recalcLocalReadWriteAddressesAB(self, kernel, tPA, tPB, subLdsIter):
     kStr = ""
     
     # self.numWritesCoalVecCompA = kernel["GlobalLoadVectorWidthA"]
@@ -3106,10 +3103,14 @@ class KernelWriter(metaclass=abc.ABCMeta):
     # kernel["LVCA"] = kernelOrig["LVCA"]//kernelOrig["DepthULdsDivisor"]
     # kernel["LVCB"] = kernelOrig["LVCB"]//kernelOrig["DepthULdsDivisor"]
     # kernel["DepthULdsDivisor"] = 1
-    # kernel["DepthU"] = kernelOrig["DepthU"]//kernelOrig["DepthULdsDivisor"]
+    # kernel["_DepthULds"]
     
-    kStr += self.recalcLocalReadWriteAddresses_impl(kernel, tPA, subLdsIter)
-    kStr += self.recalcLocalReadWriteAddresses_impl(kernel, tPB, subLdsIter)
+    kStr += self.recalcLocalWriteAddresses(kernel, tPA, subLdsIter)
+    kStr += self.recalcLocalWriteAddresses(kernel, tPB, subLdsIter)
+    if self.recalcLRCode is None:
+      self.recalcLRCode = self.recalcLocalReadAddressesAB(kernel)
+    kStr += self.recalcLRCode
+
     return kStr
   ##############################################################################
   # Declare Loop Num Iterations

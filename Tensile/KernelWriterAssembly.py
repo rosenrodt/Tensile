@@ -4428,8 +4428,8 @@ class KernelWriterAssembly(KernelWriter):
       if self.inTailLoop:
         subIterReg = self.vgprPool.checkOut(1, "subIterReg")
         kStr += self.comment1("Each wg writes 1/%u of G2L data to LDS"%kernel["DepthULdsDivisor"])
-        kStr += inst("v_lshrrev_b32", vgpr(subIterReg), log2(kernel["DepthU"]//kernel["DepthULdsDivisor"]), vgpr(uReg), "subIter = unrollIdx / DepthU_Compute")
-        kStr += inst("v_and_b32", vgpr(uReg), vgpr(uReg), kernel["DepthU"]//kernel["DepthULdsDivisor"]-1, "unrollIdx = unrollIdx % DepthU_Compute")
+        kStr += inst("v_lshrrev_b32", vgpr(subIterReg), log2(kernel["_DepthULds"]), vgpr(uReg), "subIter = unrollIdx / DepthU_Compute")
+        kStr += inst("v_and_b32", vgpr(uReg), vgpr(uReg), kernel["_DepthULds"]-1, "unrollIdx = unrollIdx % DepthU_Compute")
         tP["gpr"]["subIterReg"] = subIterReg
       else:
         kStr += self.comment1("Each thd writes 1/%u of G2L data to LDS"%kernel["DepthULdsDivisor"])
@@ -4557,27 +4557,40 @@ class KernelWriterAssembly(KernelWriter):
     assert (validBytesPerLoad <= maxBytesPerLoad)
     assert (kernel[tP["lsc"]] * kernel[tP["lsp"]] % tP["glvw"] == 0)
 
-    if validBytesPerLoad != maxBytesPerLoad or kernel["DepthULdsDivisor"]>1:
+    if validBytesPerLoad != maxBytesPerLoad:
       tmpSgpr = self.getTmpSgpr(1).idx()
-      if kernel["FractionalLoad"]:
-        kStr += inst("s_mov_b32", sgpr(tmpSgpr), validWIPerLoad, \
-            "lsc*lsp=%u*%u"%(kernel[tP["lsc"]],kernel[tP["lsp"]] ))
-        kStr += inst("v_cmp_lt_u32", \
-            "vcc", \
-            vgpr("Serial"), \
-            sgpr(tmpSgpr), \
-            "fractional: ensure tid < global read tile elements")
-      elif self.inTailLoop and kernel["DepthULdsDivisor"]>1: # where (DepthU for global read) != (DepthU for compute)
-        # only for TN tensor + TN lds layout
-        assert tP["tlu"] == 0
-        assert kernel["UnrollMajorLDS%s" % tP["tensorChar"]] == True
-        # global read code overfetches N-times of depthU data in case of DepthULdsDivisor>1
-        # only a fraction of workgroup writes data at each compute loop
-        # tmpSgpr = self.getTmpSgpr(2).idx()
-        # kStr += inst("v_cmp_ge_u32", sgpr(tmpSgpr, 2), vgpr(tP["gpr"]["uReg"]), (subLdsIter    ) * kernel["DepthU"]//kernel["DepthULdsDivisor"], "") 
-        # kStr += inst("v_cmp_lt_u32",            "vcc", vgpr(tP["gpr"]["uReg"]), (subLdsIter + 1) * kernel["DepthU"]//kernel["DepthULdsDivisor"], "")
-        kStr += inst("v_cmp_eq_u32","vcc", vgpr(tP["gpr"]["subIterReg"]), subLdsIter, "")
-        kStr += inst("s_and_b64", "vcc", "vcc", sgpr(tmpSgpr, 2), "")
+
+      kStr += inst("s_mov_b32", sgpr(tmpSgpr), validWIPerLoad, \
+          "lsc*lsp=%u*%u"%(kernel[tP["lsc"]],kernel[tP["lsp"]] ))
+      kStr += inst("v_cmp_lt_u32", \
+          "vcc", \
+          vgpr("Serial"), \
+          sgpr(tmpSgpr), \
+          "fractional: ensure tid < global read tile elements")
+
+      tmpVgpr = self.vgprPool.checkOut(1, "tmpVgpr", self.preventVgprOverflowDuringNewTile)
+      kStr += inst("v_mov_b32", vgpr(tmpVgpr), hex(self.LdsOOB), "")
+      kStr += inst("v_cndmask_b32", \
+                  vgpr(destVgpr), \
+                  vgpr(tmpVgpr), \
+                  vgpr(destVgpr), \
+                   "vcc", \
+                   "Mask load so out-of-gr-tile bounds returns 0")
+      self.vgprPool.checkIn(tmpVgpr)
+
+    elif self.inTailLoop and kernel["DepthULdsDivisor"]>1: # where (DepthU for global read) != (DepthU for compute)
+      tmpSgpr = self.getTmpSgpr(1).idx()
+
+      # only for TN tensor + TN lds layout
+      assert tP["tlu"] == 0
+      assert kernel["UnrollMajorLDS%s" % tP["tensorChar"]] == True
+      # global read code overfetches N-times of depthU data in case of DepthULdsDivisor>1
+      # only a fraction of workgroup writes data at each compute loop
+      # tmpSgpr = self.getTmpSgpr(2).idx()
+      # kStr += inst("v_cmp_ge_u32", sgpr(tmpSgpr, 2), vgpr(tP["gpr"]["uReg"]), (subLdsIter    ) * kernel["_DepthULds"], "") 
+      # kStr += inst("v_cmp_lt_u32",            "vcc", vgpr(tP["gpr"]["uReg"]), (subLdsIter + 1) * kernel["_DepthULds"], "")
+      kStr += inst("v_cmp_eq_u32","vcc", vgpr(tP["gpr"]["subIterReg"]), subLdsIter, "")
+
       tmpVgpr = self.vgprPool.checkOut(1, "tmpVgpr", self.preventVgprOverflowDuringNewTile)
       kStr += inst("v_mov_b32", vgpr(tmpVgpr), hex(self.LdsOOB), "")
       kStr += inst("v_cndmask_b32", \
@@ -5395,7 +5408,7 @@ class KernelWriterAssembly(KernelWriter):
     if tailLoop:
       # if subLdsIter is None:
       #   for subLdsIter in reversed(range(kernel["DepthULdsDivisor"])):
-      #     startCounter = kernel["DepthU"] - subLdsIter*(kernel["DepthU"]//kernel["DepthULdsDivisor"])
+      #     startCounter = kernel["_DepthULds"])
       #     kStr += inst("s_cmp_le_u32",
       #                  loopCounter,
       #                  startCounter,
@@ -5540,7 +5553,7 @@ class KernelWriterAssembly(KernelWriter):
         "inc counter%s"%(loopChar) )
 
       if subLdsIter is not None:
-        startCounter = (subLdsIter+1)*(kernel["DepthU"]//kernel["DepthULdsDivisor"])
+        startCounter = (subLdsIter+1)*(kernel["_DepthULds"])
         kStr += inst("s_cmp_ge_u32", sgpr("OrigLoopCounter"), startCounter, "OrigLoopCounter >= %u (G2L buffer part %u of %u)"%(startCounter, subLdsIter, kernel["DepthULdsDivisor"]) )
         # if subLdsIter+1 < kernel["DepthULdsDivisor"]:
         predBranchLabel = self.getNamedLabel("TailLoopEnd%s%s"%(loopChar, "_G2L%u"%(subLdsIter)))
@@ -5552,7 +5565,7 @@ class KernelWriterAssembly(KernelWriter):
       # if subLdsIter is not None:
       #   # ex: du=64 divisor=2: 1st tail endCounter=32; 2nd tail endCounter=0
       #   # ex: du=64 divisor=1: 1st tail endCounter= 0; 2nd tail endCounter=N/A
-      #   endCounter = kernel["DepthU"] - (1+subLdsIter)*kernel["DepthU"]//kernel["DepthULdsDivisor"]
+      #   endCounter = kernel["_DepthULds"]
       kStr += inst("s_cmp_le_i32", \
           loopCounter, \
           hex(endCounter), \
@@ -7235,6 +7248,64 @@ class KernelWriterAssembly(KernelWriter):
 
     return (offsetBytes, i, comment)
 
+  def recalcLocalReadAddressesAB(self, kernel):
+    imod = Code.Module()
+    self.oriLraA = None
+    self.oriLraB = None
+    if self.inTailLoop:
+      # it do 1 iteration each loop in tail loop, and is no use to wider local read next iteration.
+      # In 1 block MI, it remap localReadAddr in order to let each thread wider local read continous k
+      # this decrease performance since it require more loop to hadle continous k in eanch thread.
+      # recalculate localReadAddr to cancle wider local read in tail loop
+      if (self.numReadsIterCoalescedA > 1 or self.numReadsIterCoalescedB > 1) and kernel["MatrixInstB"] == 1: #and tP["isB"]:
+        self.numReadsIterCoalescedA = 1
+        self.numReadsIterCoalescedB = 1
+        self.lrvwA = kernel["ProblemType"]["DataType"].numMIInput()
+        self.lrvwB = kernel["ProblemType"]["DataType"].numMIInput()
+        imod.addCode(self.comment("recalculate LocalReadAddr"))
+        kStr = ""
+
+        # need to back-up the LRA before reCalculation for wider local read (when no wlr, no need to do this)
+        if kernel["PersistentKernel"]:
+          self.oriLraA = self.vgprPool.checkOut(1, "OriLocalReadAddrA")
+          self.oriLraB = self.vgprPool.checkOut(1, "OriLocalReadAddrB")
+          kStr += inst("v_mov_b32", vgpr(self.oriLraA), vgpr("LocalReadAddrA"), "back up LRA for persistent kernel + wider local read")
+          kStr += inst("v_mov_b32", vgpr(self.oriLraB), vgpr("LocalReadAddrB"), "back up LRA for persistent kernel + wider local read")
+
+        kStr += (self.lraTileAssignmentMFMA(kernel, self.tPA))
+        kStr += (self.lraFinalOffset(kernel, self.tPA))
+        kStr += (self.lraDeclareAddresses(kernel, self.tPA))
+        kStr += (self.lraTileAssignmentMFMA(kernel, self.tPB))
+        kStr += (self.lraFinalOffset(kernel, self.tPB))
+        kStr += (self.lraDeclareAddresses(kernel, self.tPB))
+        imod.addCode(kStr)
+        localRead2Perpendicular = False
+        instructions = self.memoryInstructions[self.version]
+
+        localReadWidth = self.tPA["bpe"] / self.bpr
+        if kernel["UnrollMajorLDSA"]:
+          localReadWidth = (kernel["ProblemType"]["DataType"].numMIInput() * self.tPA["bpe"]) // self.bpr
+        self.localReadInstructionIdxA = \
+          self.selectMemoryInstruction("LocalRead", localReadWidth, \
+          kernel["LocalRead2A"], \
+          self.localRead2CoalescedA, localRead2Perpendicular,
+          [self.localReadStrideCoalescedA] )
+        self.localReadInstructionA = instructions["LocalRead"][self.localReadInstructionIdxA]
+
+        localReadWidth = self.tPB["bpe"] / self.bpr
+        if kernel["UnrollMajorLDSA"]:
+          localReadWidth = (kernel["ProblemType"]["DataType"].numMIInput() * self.tPB["bpe"]) // self.bpr
+        self.localReadInstructionIdxB = \
+          self.selectMemoryInstruction("LocalRead", localReadWidth, \
+          kernel["LocalRead2B"], \
+          self.localRead2CoalescedB, localRead2Perpendicular,
+          [self.localReadStrideCoalescedB] )
+        self.localReadInstructionB = instructions["LocalRead"][ \
+          self.localReadInstructionIdxB]
+
+        self.tPA["localReadInstruction"] = self.localReadInstructionA
+        self.tPB["localReadInstruction"] = self.localReadInstructionB
+    return str(imod)
 
   ##############################################################################
   # Local Write: Do It A/B
@@ -7368,63 +7439,6 @@ class KernelWriterAssembly(KernelWriter):
       localWriteCode.addInst("s_barrier", "dump LDS" )
       localWriteCode.addText(self.assert_ne(sgpr("WorkGroup0"),1))
       #localWriteCode.addText(self.bomb())
-
-    # TODO ANT: move those local read related out of localWriteDo()
-    self.oriLraA = None
-    self.oriLraB = None
-    if self.inTailLoop:
-      # it do 1 iteration each loop in tail loop, and is no use to wider local read next iteration.
-      # In 1 block MI, it remap localReadAddr in order to let each thread wider local read continous k
-      # this decrease performance since it require more loop to hadle continous k in eanch thread.
-      # recalculate localReadAddr to cancle wider local read in tail loop
-      if (self.numReadsIterCoalescedA > 1 or self.numReadsIterCoalescedB > 1) and kernel["MatrixInstB"] == 1 and tP["isB"]:
-        self.numReadsIterCoalescedA = 1
-        self.numReadsIterCoalescedB = 1
-        self.lrvwA = kernel["ProblemType"]["DataType"].numMIInput()
-        self.lrvwB = kernel["ProblemType"]["DataType"].numMIInput()
-        imod.addCode(self.comment("reCalculate LocalReadAddr"))
-        kStr = ""
-
-        # need to back-up the LRA before reCalculation for wider local read (when no wlr, no need to do this)
-        if kernel["PersistentKernel"]:
-          self.oriLraA = self.vgprPool.checkOut(1, "OriLocalReadAddrA")
-          self.oriLraB = self.vgprPool.checkOut(1, "OriLocalReadAddrB")
-          kStr += inst("v_mov_b32", vgpr(self.oriLraA), vgpr("LocalReadAddrA"), "back up LRA for persistent kernel + wider local read")
-          kStr += inst("v_mov_b32", vgpr(self.oriLraB), vgpr("LocalReadAddrB"), "back up LRA for persistent kernel + wider local read")
-
-        kStr += (self.lraTileAssignmentMFMA(kernel, self.tPA))
-        kStr += (self.lraFinalOffset(kernel, self.tPA))
-        kStr += (self.lraDeclareAddresses(kernel, self.tPA))
-        kStr += (self.lraTileAssignmentMFMA(kernel, self.tPB))
-        kStr += (self.lraFinalOffset(kernel, self.tPB))
-        kStr += (self.lraDeclareAddresses(kernel, self.tPB))
-        imod.addCode(kStr)
-        localRead2Perpendicular = False
-        instructions = self.memoryInstructions[self.version]
-
-        localReadWidth = self.tPA["bpe"] / self.bpr
-        if kernel["UnrollMajorLDSA"]:
-          localReadWidth = (kernel["ProblemType"]["DataType"].numMIInput() * self.tPA["bpe"]) // self.bpr
-        self.localReadInstructionIdxA = \
-          self.selectMemoryInstruction("LocalRead", localReadWidth, \
-          kernel["LocalRead2A"], \
-          self.localRead2CoalescedA, localRead2Perpendicular,
-          [self.localReadStrideCoalescedA] )
-        self.localReadInstructionA = instructions["LocalRead"][self.localReadInstructionIdxA]
-
-        localReadWidth = self.tPB["bpe"] / self.bpr
-        if kernel["UnrollMajorLDSA"]:
-          localReadWidth = (kernel["ProblemType"]["DataType"].numMIInput() * self.tPB["bpe"]) // self.bpr
-        self.localReadInstructionIdxB = \
-          self.selectMemoryInstruction("LocalRead", localReadWidth, \
-          kernel["LocalRead2B"], \
-          self.localRead2CoalescedB, localRead2Perpendicular,
-          [self.localReadStrideCoalescedB] )
-        self.localReadInstructionB = instructions["LocalRead"][ \
-          self.localReadInstructionIdxB]
-
-        self.tPA["localReadInstruction"] = self.localReadInstructionA
-        self.tPB["localReadInstruction"] = self.localReadInstructionB
 
     return imod
 

@@ -1692,6 +1692,12 @@ class KernelWriterSource(KernelWriter):
     return kStr
 
   ##############################################################################
+  # Recalculate local read addresses A/B
+  ##############################################################################
+  def recalcLocalReadAddressesAB(self, kernel):
+    return ""
+
+  ##############################################################################
   # openShadowInit
   ##############################################################################
   def openShadowInit(self, kernel):
