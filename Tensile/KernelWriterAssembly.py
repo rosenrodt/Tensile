@@ -4587,7 +4587,7 @@ class KernelWriterAssembly(KernelWriter):
       # global read code overfetches N-times of depthU data in case of DepthULdsDivisor>1
       # only a fraction of workgroup writes data at each compute loop
       # tmpSgpr = self.getTmpSgpr(2).idx()
-      # kStr += inst("v_cmp_ge_u32", sgpr(tmpSgpr, 2), vgpr(tP["gpr"]["uReg"]), (subLdsIter    ) * kernel["_DepthULds"], "") 
+      # kStr += inst("v_cmp_ge_u32", sgpr(tmpSgpr, 2), vgpr(tP["gpr"]["uReg"]), (subLdsIter    ) * kernel["_DepthULds"], "")
       # kStr += inst("v_cmp_lt_u32",            "vcc", vgpr(tP["gpr"]["uReg"]), (subLdsIter + 1) * kernel["_DepthULds"], "")
       kStr += inst("v_cmp_eq_u32","vcc", vgpr(tP["gpr"]["subIterReg"]), subLdsIter, "")
 
@@ -4898,14 +4898,6 @@ class KernelWriterAssembly(KernelWriter):
           hex(kernel["LdsOffset%s"%tP["tensorChar"]]*tP["bpe"]), \
           vgpr("LocalReadAddr%s+0"%tP["tensorChar"]), \
           " += LdsOffset%s (lower)"%tP["tensorChar"])
-
-  ##############################################################################
-  # Recalculate addresses A/B
-  ##############################################################################
-  def recalcAddresses(self, kernel, tP):
-    # kl.append(self.graTileAssignment(kernel, tP))
-
-    return ""
 
   ##############################################################################
   # openShadowInit
@@ -5634,6 +5626,12 @@ class KernelWriterAssembly(KernelWriter):
             self.vgprPool.checkIn(self.oriLraB)
             self.oriLraA = None
             self.oriLraB = None
+            kStr += inst("v_mov_b32", vgpr("LocalWriteAddrA"), vgpr(self.oriLwaA), "restore LWA")
+            kStr += inst("v_mov_b32", vgpr("LocalWriteAddrB"), vgpr(self.oriLwaB), "restore LWA")
+            self.vgprPool.checkIn(self.oriLwaA)
+            self.vgprPool.checkIn(self.oriLwaB)
+            self.oriLwaA = None
+            self.oriLwaB = None
           else:
             for tP in [self.tPA, self.tPB]:
               tc     = tP["tensorChar"]
@@ -7248,10 +7246,48 @@ class KernelWriterAssembly(KernelWriter):
 
     return (offsetBytes, i, comment)
 
+  def recalcLocalWriteAddresses(self, kernel, tP, subLdsIter):
+
+    tc = tP["tensorChar"]
+
+    kStr = ""
+    kStr += self.comment("recalculate LocalWriteAddr")
+    # backUpInst = getattr(self, "localWriteInstructionIdx{}".format(tc)) #
+    lwvw = getattr(self, "localWriteWidth{}".format(tc))
+    newInstIdx = self.selectMemoryInstruction("LocalWrite", lwvw*kernel["DepthULdsDivisor"], \
+        kernel["LocalWrite2A"], \
+        self.localWrite2CoalescedA, self.localWrite2PerpendicularA,
+        [self.localWriteStrideTileA, self.localWriteStrideUnrollA] )
+    tP["localWriteInstruction"] = self.memoryInstructions[self.version]["LocalWrite"][newInstIdx]
+
+    if kernel["PersistentKernel"]:
+      if getattr(self, "oriLwa{}".format(tc)) is None:
+        setattr(self, "oriLwa{}".format(tc), self.vgprPool.checkOut(1, "OriLocalWriteddr{}".format(tc)) )
+        kStr += inst("v_mov_b32", vgpr(getattr(self, "oriLwa{}".format(tc)), vgpr("LocalReadAddrA"), "back up LWA for persistent kernel + wider local read"))
+
+    # global read tile assignment
+    kStr += self.graTileAssignment(kernel, tP)
+    # global read tile offsets
+    kStr += self.graTileOffsets(kernel, tP)
+    # global read unroll offsets
+    kStr += self.graUnrollOffsets(kernel, tP)
+
+    # local write tile assignments
+    kStr += self.lwaTileAssignment(kernel, tP)
+    # local write unroll assignments
+    kStr += self.lwaUnrollAssignment(kernel, tP)
+    # local write local write first offsets
+    kStr += self.lwaFirstOffset(kernel, tP, subLdsIter)
+    # local write final offsets
+    kStr += self.lwaFinalOffsets(kernel, tP)
+    # local write declare addresses
+    kStr += self.lwaDeclareAddresses(kernel, tP)
+
+    return kStr
+
   def recalcLocalReadAddressesAB(self, kernel):
     imod = Code.Module()
-    self.oriLraA = None
-    self.oriLraB = None
+
     if self.inTailLoop:
       # it do 1 iteration each loop in tail loop, and is no use to wider local read next iteration.
       # In 1 block MI, it remap localReadAddr in order to let each thread wider local read continous k
@@ -7267,10 +7303,12 @@ class KernelWriterAssembly(KernelWriter):
 
         # need to back-up the LRA before reCalculation for wider local read (when no wlr, no need to do this)
         if kernel["PersistentKernel"]:
-          self.oriLraA = self.vgprPool.checkOut(1, "OriLocalReadAddrA")
-          self.oriLraB = self.vgprPool.checkOut(1, "OriLocalReadAddrB")
-          kStr += inst("v_mov_b32", vgpr(self.oriLraA), vgpr("LocalReadAddrA"), "back up LRA for persistent kernel + wider local read")
-          kStr += inst("v_mov_b32", vgpr(self.oriLraB), vgpr("LocalReadAddrB"), "back up LRA for persistent kernel + wider local read")
+          if self.oriLraA is None:
+            self.oriLraA = self.vgprPool.checkOut(1, "OriLocalReadAddrA")
+            kStr += inst("v_mov_b32", vgpr(self.oriLraA), vgpr("LocalReadAddrA"), "back up LRA for persistent kernel + wider local read")
+          if self.oriLraB is None:
+            self.oriLraB = self.vgprPool.checkOut(1, "OriLocalReadAddrB")
+            kStr += inst("v_mov_b32", vgpr(self.oriLraB), vgpr("LocalReadAddrB"), "back up LRA for persistent kernel + wider local read")
 
         kStr += (self.lraTileAssignmentMFMA(kernel, self.tPA))
         kStr += (self.lraFinalOffset(kernel, self.tPA))

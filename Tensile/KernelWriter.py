@@ -2058,12 +2058,16 @@ class KernelWriter(metaclass=abc.ABCMeta):
       if self.enable["Sync"]:
         kl.append(self.syncThreads(kernel))
 
-      # switch from interleave-K local writes to fractional local write
-      # as tail loop iterate LDS read address one unit of K (or MatInstK) at a time
-      from copy import deepcopy
-      kernelOrig = deepcopy(kernel)
+      # the following read/write addresses could be modified in recalcLocalReadWriteAddressesAB() due to policy change
       self.recalcLRCode = None
-      for subLdsIter in range(0, kernelOrig["DepthULdsDivisor"]):
+      self.oriLraA = None # back up original local read address vgpr
+      self.oriLraB = None
+      self.oriLwaA = None # back up original local write address vgpr
+      self.oriLwaB = None
+      for subLdsIter in range(0, kernel["DepthULdsDivisor"]):
+        # change local write poilcy from interleave-K to fractional as tail loop
+        # iterate LDS read address one unit of K at a time
+        # change local read policy from wider local read to one unit of K at a time
         kl.append(self.comment("Recalc local read/write offsets"))
         kl.append(self.recalcLocalReadWriteAddressesAB(kernel, tensorParametersA, tensorParametersB, subLdsIter))
         if self.enable["LocalWrite"]:
@@ -2136,10 +2140,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
             kl.append(self.macIter(kernel, 0, tailLoopInnerUnroll, True))
         # tail: close
         kl.append(self.closeLoop(kernel, -1, True, subLdsIter))
-
-      # restore kernel params
-      kernel = kernelOrig
-
     kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
     # extra summation loops: global increment and close
     for i in reversed(range(self.otherSummationLoops)):
@@ -3060,51 +3060,13 @@ class KernelWriter(metaclass=abc.ABCMeta):
   ##############################################################################
   # Recalculate local write addresses A/B
   ##############################################################################
+  @abc.abstractmethod
   def recalcLocalWriteAddresses(self, kernel, tP, subLdsIter):
-    kStr = ""
-
-    # backUpInst = getattr(self, "localWriteInstructionIdx{}".format(tP["tensorChar"])) # 
-    lwvw = getattr(self, "localWriteWidth{}".format(tP["tensorChar"]))
-    newInstIdx = self.selectMemoryInstruction("LocalWrite", lwvw*kernel["DepthULdsDivisor"], \
-        kernel["LocalWrite2A"], \
-        self.localWrite2CoalescedA, self.localWrite2PerpendicularA,
-        [self.localWriteStrideTileA, self.localWriteStrideUnrollA] )
-    tP["localWriteInstruction"] = self.memoryInstructions[self.version]["LocalWrite"][newInstIdx]
-
-    # global read tile assignment
-    kStr += self.graTileAssignment(kernel, tP)
-    # global read tile offsets
-    kStr += self.graTileOffsets(kernel, tP)
-    # global read unroll offsets
-    kStr += self.graUnrollOffsets(kernel, tP)
-
-    # local write tile assignments
-    kStr += self.lwaTileAssignment(kernel, tP)
-    # local write unroll assignments
-    kStr += self.lwaUnrollAssignment(kernel, tP)
-    # local write local write first offsets
-    kStr += self.lwaFirstOffset(kernel, tP, subLdsIter)
-    # local write final offsets
-    kStr += self.lwaFinalOffsets(kernel, tP)
-    # local write declare addresses
-    kStr += self.lwaDeclareAddresses(kernel, tP)
-
-    return kStr
+    return ""
 
   def recalcLocalReadWriteAddressesAB(self, kernel, tPA, tPB, subLdsIter):
     kStr = ""
-    
-    # self.numWritesCoalVecCompA = kernel["GlobalLoadVectorWidthA"]
-    # self.numWritesCoalVecCompB = kernel["GlobalLoadVectorWidthB"]
-    # print("tensor param A lsc={}, lsp={}".format(kernelOrig[tensorParametersA["lsc"]], kernelOrig[tensorParametersA["lsp"]]))
-    # print("tensor param B lsc={}, lsp={}".format(kernelOrig[tensorParametersB["lsc"]], kernelOrig[tensorParametersB["lsp"]]))
-    # kernel["LSCA"] = kernelOrig["LSCA"]//kernelOrig["DepthULdsDivisor"]
-    # kernel["LSCB"] = kernelOrig["LSCB"]//kernelOrig["DepthULdsDivisor"]
-    # kernel["LVCA"] = kernelOrig["LVCA"]//kernelOrig["DepthULdsDivisor"]
-    # kernel["LVCB"] = kernelOrig["LVCB"]//kernelOrig["DepthULdsDivisor"]
-    # kernel["DepthULdsDivisor"] = 1
-    # kernel["_DepthULds"]
-    
+
     kStr += self.recalcLocalWriteAddresses(kernel, tPA, subLdsIter)
     kStr += self.recalcLocalWriteAddresses(kernel, tPB, subLdsIter)
     if self.recalcLRCode is None:
@@ -3112,6 +3074,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
     kStr += self.recalcLRCode
 
     return kStr
+
   ##############################################################################
   # Declare Loop Num Iterations
   ##############################################################################
@@ -3184,7 +3147,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
   # Close Loop
   ##############################################################################
   @abc.abstractmethod
-  def closeLoop(self, kernel, loopIdx, finalLoop, subLdsIter):
+  def closeLoop(self, kernel, loopIdx, finalLoop, subLdsIter, emitEndLabelOnly):
     return ""
 
   ##############################################################################
