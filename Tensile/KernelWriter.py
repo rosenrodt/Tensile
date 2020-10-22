@@ -1272,9 +1272,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
       extraComment = ""
       # import pdb; pdb.set_trace()
       if isLastLoop:
-        extraComment += " (isLastLoop)"
-      else:
-        extraComment += " (isNotLastLoop)"
+        extraComment += " (last unrolled loop)"
       # if isNGLL:
       if not isLastLoop: #isNGLL:
         if isResetLroIter:
@@ -2059,76 +2057,99 @@ class KernelWriter(metaclass=abc.ABCMeta):
         kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, 0, -1, -1, "2wait for global read"))
       if self.enable["Sync"]:
         kl.append(self.syncThreads(kernel))
-      if self.enable["LocalWrite"]:
-        # tail: local write
-        kl.append(self.localWriteInitPointers(kernel, tensorParametersA))
-        kl.append(self.localWriteInitPointers(kernel, tensorParametersB))
-        kl.append(self.comment("local write a"))
-        kl.append(self.localWriteDo(kernel, tensorParametersA, 0))
-        kl.append(self.comment("local write b"))
-        kl.append(self.localWriteDo(kernel, tensorParametersB, 0))
-      if self.enable["Wait"]:
-        kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, "5wait for local write"))
-      if self.enable["Sync"]:
-        kl.append(self.syncThreads(kernel))
-      #kl.append(self.dumpLds(kernel, 0, 8))
 
-      # tail: re-init local read addresses
-      if kernel["PrefetchGlobalRead"]:
-        kl.append(self.comment("local read reset offsets a"))
-        kl.append(self.localReadResetOffsets(kernel, tensorParametersA))
-        kl.append(self.comment("local read reset offsets b"))
-        kl.append(self.localReadResetOffsets(kernel, tensorParametersB))
-        kl.append(self.comment("local read init pointers a"))
-        kl.append(self.localReadInitPointers(kernel, tensorParametersA))
-        kl.append(self.comment("local read init pointers b"))
-        kl.append(self.localReadInitPointers(kernel, tensorParametersB))
-      # tail: macs
-      kl.append(self.comment("tail loop: macs"))
-      kl.append(self.openLoop(kernel, -1))
+      # switch from interleave-K local writes to fractional local write
+      # as tail loop iterate LDS read address one unit of K (or MatInstK) at a time
+      from copy import deepcopy
+      kernelOrig = deepcopy(kernel)
+      # print("tensor param A lsc={}, lsp={}".format(kernelOrig[tensorParametersA["lsc"]], kernelOrig[tensorParametersA["lsp"]]))
+      # print("tensor param B lsc={}, lsp={}".format(kernelOrig[tensorParametersB["lsc"]], kernelOrig[tensorParametersB["lsp"]]))
+      # kernel["LSCA"] = kernelOrig["LSCA"]//kernelOrig["DepthULdsDivisor"]
+      # kernel["LSCB"] = kernelOrig["LSCB"]//kernelOrig["DepthULdsDivisor"]
+      # kernel["LVCA"] = kernelOrig["LVCA"]//kernelOrig["DepthULdsDivisor"]
+      # kernel["LVCB"] = kernelOrig["LVCB"]//kernelOrig["DepthULdsDivisor"]
+      # kernel["DepthULdsDivisor"] = 1
+      # kernel["DepthU"] = kernelOrig["DepthU"]//kernelOrig["DepthULdsDivisor"]
+      # assert kernelOrig["DepthU"] == 64
+      for subLdsIter in range(0, kernelOrig["DepthULdsDivisor"]):
+        kl.append(self.comment("Recalc local read/write offsets"))
+        kl.append(self.recalcLocalReadWriteAddresses(kernel, tensorParametersA, tensorParametersB, subLdsIter))
+        if self.enable["LocalWrite"]:
+          # tail: local write
+          kl.append(self.localWriteInitPointers(kernel, tensorParametersA))
+          kl.append(self.localWriteInitPointers(kernel, tensorParametersB))
+          kl.append(self.comment("local write a"))
+          kl.append(self.localWriteDo(kernel, tensorParametersA, None)) # TODO ANT: hack
+          kl.append(self.comment("local write b"))
+          kl.append(self.localWriteDo(kernel, tensorParametersB, None))
+        if self.enable["Wait"]:
+          kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, "5wait for local write"))
+        if self.enable["Sync"]:
+          kl.append(self.syncThreads(kernel))
+        #kl.append(self.dumpLds(kernel, 0, 8))
 
-      # Try to use InnerUnroll in the tail loop if allowed:
-      KinInnerUnroll = kernel["InnerUnroll"]
-      if kernel["EnableMatrixInstruction"]:
-        KinInnerUnroll *= kernel["MatrixInstK"]
-      tailLoopInnerUnroll = kernel["InnerUnroll"] if (kernel["AssertSummationElementMultiple"] % KinInnerUnroll == 0) else 1
+        # tail: re-init local read addresses
+        if kernel["PrefetchGlobalRead"]:
+          kl.append(self.comment("local read reset offsets a"))
+          kl.append(self.localReadResetOffsets(kernel, tensorParametersA))
+          kl.append(self.comment("local read reset offsets b"))
+          kl.append(self.localReadResetOffsets(kernel, tensorParametersB))
+          kl.append(self.comment("local read init pointers a"))
+          kl.append(self.localReadInitPointers(kernel, tensorParametersA))
+          kl.append(self.comment("local read init pointers b"))
+          kl.append(self.localReadInitPointers(kernel, tensorParametersB))
+        # tail: macs
+        kl.append(self.comment("tail loop: macs"))
+        # if subLdsIter == 0: # outer most loop
+        #   kl.append(self.openLoop(kernel, -1, None))
+        kl.append(self.openLoop(kernel, -1, subLdsIter))
 
-      pack[0] = Code.Module()
-      for iui in range(0,tailLoopInnerUnroll):
-        if self.enable["LocalRead"]:
-          # Reading 16-bit data from LDS requires packing when ECC enabled
-          kl.append(self.comment("local read a"))
-          localReadCodeA, packCodeA = self.localReadDo(kernel, 0, iui, 0, tensorParametersA)
-          kl.append(localReadCodeA)
-          kl.append(self.comment("local read b"))
-          localReadCodeB, packCodeB = self.localReadDo(kernel, 0, iui, 0, tensorParametersB)
-          kl.append(localReadCodeB)
-          pack[0].addCode(packCodeA)
-          pack[0].addCode(packCodeB)
-
-          kl.append(self.comment("local read inc a"))
-          kl.append(self.localReadInc(kernel, iui, tensorParametersA))
-          kl.append(self.comment("local read inc b"))
-          kl.append(self.localReadInc(kernel, iui, tensorParametersB))
-      if self.enable["Wait"]:
-        kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, -1, 0, "4wait for local read"))
-
-      if kernel["EnableMatrixInstruction"]:
-        kl.append(pack[0])
-        for item in list(pack[0].items()):
-          if item.tempVgpr != None:
-            self.vgprPool.checkIn(item.tempVgpr)
-            item.tempVgpr = None
-        pack[0] = Code.Module()
-      if self.enable["MAC"]:
+        # Try to use InnerUnroll in the tail loop if allowed:
+        KinInnerUnroll = kernel["InnerUnroll"]
         if kernel["EnableMatrixInstruction"]:
-          kl.append(self.mfmaIter(kernel, 0, tailLoopInnerUnroll, True))
-        else:
-          kl.append(self.macIter(kernel, 0, tailLoopInnerUnroll, True))
+          KinInnerUnroll *= kernel["MatrixInstK"]
+        tailLoopInnerUnroll = kernel["InnerUnroll"] if (kernel["AssertSummationElementMultiple"] % KinInnerUnroll == 0) else 1
 
-      # tail: close
-      kl.append(self.closeLoop(kernel, -1, True))
+        pack[0] = Code.Module()
+        for iui in range(0,tailLoopInnerUnroll):
+          if self.enable["LocalRead"]:
+            # Reading 16-bit data from LDS requires packing when ECC enabled
+            kl.append(self.comment("local read a"))
+            localReadCodeA, packCodeA = self.localReadDo(kernel, 0, iui, 0, tensorParametersA)
+            kl.append(localReadCodeA)
+            kl.append(self.comment("local read b"))
+            localReadCodeB, packCodeB = self.localReadDo(kernel, 0, iui, 0, tensorParametersB)
+            kl.append(localReadCodeB)
+            pack[0].addCode(packCodeA)
+            pack[0].addCode(packCodeB)
 
+            kl.append(self.comment("local read inc a"))
+            kl.append(self.localReadInc(kernel, iui, tensorParametersA))
+            kl.append(self.comment("local read inc b"))
+            kl.append(self.localReadInc(kernel, iui, tensorParametersB))
+        if self.enable["Wait"]:
+          kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, -1, 0, "4wait for local read"))
+
+        if kernel["EnableMatrixInstruction"]:
+          kl.append(pack[0])
+          for item in list(pack[0].items()):
+            if item.tempVgpr != None:
+              self.vgprPool.checkIn(item.tempVgpr)
+              item.tempVgpr = None
+          pack[0] = Code.Module()
+        if self.enable["MAC"]:
+          if kernel["EnableMatrixInstruction"]:
+            kl.append(self.mfmaIter(kernel, 0, tailLoopInnerUnroll, True))
+          else:
+            kl.append(self.macIter(kernel, 0, tailLoopInnerUnroll, True))
+        # tail: close
+        kl.append(self.closeLoop(kernel, -1, True, subLdsIter))
+
+      # restore kernel params
+      kernel = kernelOrig
+      assert kernel["DepthU"] == 64
+
+    kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
     # extra summation loops: global increment and close
     for i in reversed(range(self.otherSummationLoops)):
       kl.append(self.comment("global read inc AB"))
@@ -2531,7 +2552,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
       self.numWritesPerpVecCompA = 1
     else:
       self.numWritesCoalVecCompA = 1
-      self.numWritesPerpVecCompA = vwa // kernel["DepthULdsDivisor"]
+      self.numWritesPerpVecCompA = vwa # TODO ANT: check if needed since only TN support // kernel["DepthULdsDivisor"]
     del writeCoal
 
     self.numReadVectorComponentsA = kernel["GlobalLoadVectorWidthA"] \
@@ -2644,7 +2665,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
       self.numWritesPerpVecCompB = 1
     else:
       self.numWritesCoalVecCompB = 1
-      self.numWritesPerpVecCompB = vwb // kernel["DepthULdsDivisor"]
+      self.numWritesPerpVecCompB = vwb # TODO ANT: check if needed since only TN support // kernel["DepthULdsDivisor"]
     del writeCoal
 
     # numReadVectorComponentsB is refers to global reads
@@ -2993,7 +3014,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
   # Local Write Addresses: First Offset A/B
   ##############################################################################
   @abc.abstractmethod
-  def lwaFirstOffset(self, kernel, tP):
+  def lwaFirstOffset(self, kernel, tP, subLdsIter):
     return ""
 
   ##############################################################################
@@ -3038,6 +3059,58 @@ class KernelWriter(metaclass=abc.ABCMeta):
   def lraDeclareAddresses(self, kernel, tP):
     return ""
 
+  ##############################################################################
+  # Recalculate addresses A/B
+  ##############################################################################
+  def recalcLocalReadWriteAddresses_impl(self, kernel, tP, subLdsIter):
+    kStr = ""
+
+    backUpInst = getattr(self, "localWriteInstructionIdx{}".format(tP["tensorChar"]))
+    lwvw = getattr(self, "localWriteWidth{}".format(tP["tensorChar"]))
+    newInstIdx = self.selectMemoryInstruction("LocalWrite", lwvw*kernel["DepthULdsDivisor"], \
+        kernel["LocalWrite2A"], \
+        self.localWrite2CoalescedA, self.localWrite2PerpendicularA,
+        [self.localWriteStrideTileA, self.localWriteStrideUnrollA] )
+    newInst = self.memoryInstructions[self.version]["LocalWrite"][newInstIdx]
+    tP["localWriteInstruction"] = newInst
+
+    # global read tile assignment
+    kStr += self.graTileAssignment(kernel, tP)
+    # global read tile offsets
+    kStr += self.graTileOffsets(kernel, tP)
+    # global read unroll offsets
+    kStr += self.graUnrollOffsets(kernel, tP)
+
+    # local write tile assignments
+    kStr += self.lwaTileAssignment(kernel, tP)
+    # local write unroll assignments
+    kStr += self.lwaUnrollAssignment(kernel, tP)
+    # local write local write first offsets
+    kStr += self.lwaFirstOffset(kernel, tP, subLdsIter)
+    # local write final offsets
+    kStr += self.lwaFinalOffsets(kernel, tP)
+    # local write declare addresses
+    kStr += self.lwaDeclareAddresses(kernel, tP)
+
+    return kStr
+
+  def recalcLocalReadWriteAddresses(self, kernel, tPA, tPB, subLdsIter):
+    kStr = ""
+    
+    # self.numWritesCoalVecCompA = kernel["GlobalLoadVectorWidthA"]
+    # self.numWritesCoalVecCompB = kernel["GlobalLoadVectorWidthB"]
+    # print("tensor param A lsc={}, lsp={}".format(kernelOrig[tensorParametersA["lsc"]], kernelOrig[tensorParametersA["lsp"]]))
+    # print("tensor param B lsc={}, lsp={}".format(kernelOrig[tensorParametersB["lsc"]], kernelOrig[tensorParametersB["lsp"]]))
+    # kernel["LSCA"] = kernelOrig["LSCA"]//kernelOrig["DepthULdsDivisor"]
+    # kernel["LSCB"] = kernelOrig["LSCB"]//kernelOrig["DepthULdsDivisor"]
+    # kernel["LVCA"] = kernelOrig["LVCA"]//kernelOrig["DepthULdsDivisor"]
+    # kernel["LVCB"] = kernelOrig["LVCB"]//kernelOrig["DepthULdsDivisor"]
+    # kernel["DepthULdsDivisor"] = 1
+    # kernel["DepthU"] = kernelOrig["DepthU"]//kernelOrig["DepthULdsDivisor"]
+    
+    kStr += self.recalcLocalReadWriteAddresses_impl(kernel, tPA, subLdsIter)
+    kStr += self.recalcLocalReadWriteAddresses_impl(kernel, tPB, subLdsIter)
+    return kStr
   ##############################################################################
   # Declare Loop Num Iterations
   ##############################################################################
@@ -3103,14 +3176,14 @@ class KernelWriter(metaclass=abc.ABCMeta):
   # loopIdx<0 : tail loop
   ##############################################################################
   @abc.abstractmethod
-  def openLoop(self, kernel, loopIdx):
+  def openLoop(self, kernel, loopIdx, subLdsIter):
     return ""
 
   ##############################################################################
   # Close Loop
   ##############################################################################
   @abc.abstractmethod
-  def closeLoop(self, kernel, loopIdx, finalLoop):
+  def closeLoop(self, kernel, loopIdx, finalLoop, subLdsIter):
     return ""
 
   ##############################################################################

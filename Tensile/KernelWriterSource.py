@@ -1609,7 +1609,7 @@ class KernelWriterSource(KernelWriter):
   ##############################################################################
   # Local Write Addresses: First Offset A/B
   ##############################################################################
-  def lwaFirstOffset(self, kernel, tP):
+  def lwaFirstOffset(self, kernel, tP, subLdsIter=0):
     kStr = ""
     kStr += "  unsigned int localWriteFirstOffset%s = lw%s%s + lw%s%s*(MT%s+PAD)%s;%s" \
         % (tP["tensorChar"], tP["tensorChar"], tP["tileChar"], \

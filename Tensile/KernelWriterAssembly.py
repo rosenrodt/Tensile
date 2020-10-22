@@ -1701,6 +1701,7 @@ class KernelWriterAssembly(KernelWriter):
       # contractions with multiple summations will use multiple LoopCounters, if PSD=0
       for i in range(kernel["ProblemType"]["NumIndicesSummation"]):
         self.defineSgpr(self.loopCounterName(kernel,i), 1)
+        # TODO ANT: remove SGPR NumRemainderSumElements
         # numRemainderSumElements is required by multi-k matrix product in the multiply-accumulate loop.
         # It means in the final iteration of each tail loop, the last N elem along summation dimension
         # should be filled with 0's (numRemainderSumElements = numIterK % MatrixInstK)
@@ -2018,14 +2019,14 @@ class KernelWriterAssembly(KernelWriter):
         kernel["ProblemType"]["IndicesSummation"][self.unrollIdx]]
     self.labels = {}
     #self.getLabelNum("PrefetchGlobalBegin")
-    self.getLabelNum("PrefetchGlobalEnd")
-    self.getLabelNum("LoopBegin%s"%(unrollChar))
-    self.getLabelNum("LoopEnd%s"%(unrollChar))
-    self.getLabelNum("LoopEnd%s_oddexit"%(unrollChar))
-    self.getLabelNum("PrefetchGlobalLastIterEnd")
-    self.getLabelNum("TailLoopBegin%s"%(unrollChar))
-    self.getLabelNum("TailLoopEnd%s"%(unrollChar))
-    self.getLabelNum("KernelEnd%s"%(unrollChar))
+    self.getNamedLabel("PrefetchGlobalEnd")
+    self.getNamedLabel("LoopBegin%s"%(unrollChar))
+    self.getNamedLabel("LoopEnd%s"%(unrollChar))
+    self.getNamedLabel("LoopEnd%s_oddexit"%(unrollChar))
+    self.getNamedLabel("PrefetchGlobalLastIterEnd")
+    self.getNamedLabel("TailLoopBegin%s"%(unrollChar))
+    self.getNamedLabel("TailLoopEnd%s"%(unrollChar))
+    self.getNamedLabel("KernelEnd%s"%(unrollChar))
     # shift vectors determined later
 
     isBFHalfHPA = (kernel["ProblemType"]["DataType"].isHalf() or kernel["ProblemType"]["DataType"].isBFloat16()) and \
@@ -4424,14 +4425,21 @@ class KernelWriterAssembly(KernelWriter):
     uReg = tP["gpr"]["uReg2" if kernel["GlobalSplitU"] > 1 else "uReg"]
     kStr += self.comment1("lwaUnrollAssignment%s = %s" % (tP["tensorChar"], vgpr(uReg)))
     if kernel["DepthULdsDivisor"] > 1 and kernel["UnrollMajorLDS%s" % tP["tensorChar"]]:
-      kStr += self.comment1("Each thread writes 1/%u of data to LDS"%kernel["DepthULdsDivisor"])
-      kStr += inst("v_lshrrev_b32", vgpr(uReg), log2(kernel["DepthULdsDivisor"]), vgpr(uReg), "")
+      if self.inTailLoop:
+        subIterReg = self.vgprPool.checkOut(1, "subIterReg")
+        kStr += self.comment1("Each wg writes 1/%u of G2L data to LDS"%kernel["DepthULdsDivisor"])
+        kStr += inst("v_lshrrev_b32", vgpr(subIterReg), log2(kernel["DepthU"]//kernel["DepthULdsDivisor"]), vgpr(uReg), "subIter = unrollIdx / DepthU_Compute")
+        kStr += inst("v_and_b32", vgpr(uReg), vgpr(uReg), kernel["DepthU"]//kernel["DepthULdsDivisor"]-1, "unrollIdx = unrollIdx % DepthU_Compute")
+        tP["gpr"]["subIterReg"] = subIterReg
+      else:
+        kStr += self.comment1("Each thd writes 1/%u of G2L data to LDS"%kernel["DepthULdsDivisor"])
+        kStr += inst("v_lshrrev_b32", vgpr(uReg), log2(kernel["DepthULdsDivisor"]), vgpr(uReg), "unrollIdx = unrollIdx / DepthULdsDivisor")
     return kStr
 
   ##############################################################################
   # Local Write Addresses: First Offset A/B
   ##############################################################################
-  def lwaFirstOffset(self, kernel, tP):
+  def lwaFirstOffset(self, kernel, tP, subLdsIter=0):
     kStr = ""
     tc = tP["tensorChar"]
     LdsPad = kernel["LdsPad%s"%tc] if kernel["LdsBlockSizePerPad%s"%tc] == 0 else 0
@@ -4534,10 +4542,9 @@ class KernelWriterAssembly(KernelWriter):
 
     self.vgprPool.checkIn(tP["gpr"]["lwoT"])
     tP["gpr"]["lwoT"] = None
-    self.vgprPool.checkIn(tP["gpr"]["uReg"])
     if kernel["GlobalSplitU"] > 1:
       self.vgprPool.checkIn(tP["gpr"]["uReg2"])
-
+      tP["gpr"]["uReg2"] = None
     #LSC_ * LSP_
     numBytesPerElement = kernel["ProblemType"]["DataType"].numBytes()
     validWIPerLoad     = kernel[tP["lsc"]] * kernel[tP["lsp"]]//tP["glvw"]
@@ -4550,15 +4557,27 @@ class KernelWriterAssembly(KernelWriter):
     assert (validBytesPerLoad <= maxBytesPerLoad)
     assert (kernel[tP["lsc"]] * kernel[tP["lsp"]] % tP["glvw"] == 0)
 
-    if validBytesPerLoad != maxBytesPerLoad:
+    if validBytesPerLoad != maxBytesPerLoad or kernel["DepthULdsDivisor"]>1:
       tmpSgpr = self.getTmpSgpr(1).idx()
-      kStr += inst("s_mov_b32", sgpr(tmpSgpr), validWIPerLoad, \
-          "lsc*lsp=%u*%u"%(kernel[tP["lsc"]],kernel[tP["lsp"]] ))
-      kStr += inst("v_cmp_lt_u32", \
-          "vcc", \
-          vgpr("Serial"), \
-          sgpr(tmpSgpr), \
-          "fractional: ensure tid < global read tile elements")
+      if kernel["FractionalLoad"]:
+        kStr += inst("s_mov_b32", sgpr(tmpSgpr), validWIPerLoad, \
+            "lsc*lsp=%u*%u"%(kernel[tP["lsc"]],kernel[tP["lsp"]] ))
+        kStr += inst("v_cmp_lt_u32", \
+            "vcc", \
+            vgpr("Serial"), \
+            sgpr(tmpSgpr), \
+            "fractional: ensure tid < global read tile elements")
+      elif self.inTailLoop and kernel["DepthULdsDivisor"]>1: # where (DepthU for global read) != (DepthU for compute)
+        # only for TN tensor + TN lds layout
+        assert tP["tlu"] == 0
+        assert kernel["UnrollMajorLDS%s" % tP["tensorChar"]] == True
+        # global read code overfetches N-times of depthU data in case of DepthULdsDivisor>1
+        # only a fraction of workgroup writes data at each compute loop
+        # tmpSgpr = self.getTmpSgpr(2).idx()
+        # kStr += inst("v_cmp_ge_u32", sgpr(tmpSgpr, 2), vgpr(tP["gpr"]["uReg"]), (subLdsIter    ) * kernel["DepthU"]//kernel["DepthULdsDivisor"], "") 
+        # kStr += inst("v_cmp_lt_u32",            "vcc", vgpr(tP["gpr"]["uReg"]), (subLdsIter + 1) * kernel["DepthU"]//kernel["DepthULdsDivisor"], "")
+        kStr += inst("v_cmp_eq_u32","vcc", vgpr(tP["gpr"]["subIterReg"]), subLdsIter, "")
+        kStr += inst("s_and_b64", "vcc", "vcc", sgpr(tmpSgpr, 2), "")
       tmpVgpr = self.vgprPool.checkOut(1, "tmpVgpr", self.preventVgprOverflowDuringNewTile)
       kStr += inst("v_mov_b32", vgpr(tmpVgpr), hex(self.LdsOOB), "")
       kStr += inst("v_cndmask_b32", \
@@ -4600,7 +4619,11 @@ class KernelWriterAssembly(KernelWriter):
                     sgpr(mask,2), \
                     "Mask load so out-of-gr-tile bounds returns 0. Note 1.0f=0x3f80000 which is large non-neg int")
 
-
+    self.vgprPool.checkIn(tP["gpr"]["uReg"])
+    tP["gpr"]["uReg"] = None
+    if "subIterReg" in tP["gpr"]:
+      self.vgprPool.checkIn(tP["gpr"]["subIterReg"])
+      tP["gpr"]["subIterReg"] = None
     # dump lds write offsets
     #if tP["isA"]:
       #kStr += self.dump(vgpr("LocalWriteAddr%s"%tP["tensorChar"]))
@@ -4864,6 +4887,14 @@ class KernelWriterAssembly(KernelWriter):
           " += LdsOffset%s (lower)"%tP["tensorChar"])
 
   ##############################################################################
+  # Recalculate addresses A/B
+  ##############################################################################
+  def recalcAddresses(self, kernel, tP):
+    # kl.append(self.graTileAssignment(kernel, tP))
+
+    return ""
+
+  ##############################################################################
   # openShadowInit
   # Label after prefetches are launched.  This is present even if ShadowInit not
   # used.
@@ -4889,7 +4920,7 @@ class KernelWriterAssembly(KernelWriter):
       lastIterEnd = self.getLabelNum("LoopEnd%s"%loopChar)
     else:
       lastIterEnd = self.getLabelNum("PrefetchGlobalLastIterEnd")
-    kStr += inst("s_cbranch_scc1 label_%04u"\
+    kStr += inst("s_cbranch_scc1 %s"\
           % lastIterEnd, \
           "after InitC, skip to end of prefetch last iter b/c numIter==0")
 
@@ -5217,13 +5248,14 @@ class KernelWriterAssembly(KernelWriter):
         kStr += inst("s_cmov_b32", loopCounter, hex(0), "numIter=0 if gsuSimIdx!=remainder")
 
       # if tail numIter == 0 skip altogether
-      tailLoopLabelEnd = self.getLabelNum("TailLoopEnd%s"%(loopChar) )
+      tailLoopLabelEnd = self.getNamedLabel("TailLoopEnd%s"%(loopChar) )
       kStr += inst("s_cmp_eq_u32", loopCounter, \
           hex(0), "numIter%s == 0"%loopChar )
-      kStr += inst("s_cbranch_scc1 label_%04u"\
+      kStr += inst("s_mov_b32", sgpr("OrigLoopCounter"), 0, \
+          "repurpose to count each localRead increment")
+      kStr += inst("s_cbranch_scc1 %s"\
           % tailLoopLabelEnd, \
           "skip to end of tail loop b/c numIter==0")
-
     ########################################
     # Unrolled Loop
     elif loopIdx == self.unrollIdx:
@@ -5322,8 +5354,10 @@ class KernelWriterAssembly(KernelWriter):
 
   ##############################################################################
   # Open Loop
+  # subLdsIter: 'None' means generating branching code to decide which part of G2L
+  #             buffer to write to LDS
   ##############################################################################
-  def openLoop(self, kernel, loopIdx):
+  def openLoop(self, kernel, loopIdx, subLdsIter=None):
     kStr = ""
     # TODO - rewrite this function to simplify control-flow between tail-loop / unroll loop
     tailLoop = loopIdx < 0
@@ -5334,8 +5368,8 @@ class KernelWriterAssembly(KernelWriter):
         kernel["ProblemType"]["IndicesSummation"][loopIdx]]
     if not tailLoop:
       kStr += "%s:\n" % self.getNamedLabel("openLoop%s"%loopChar)
-    loopLabelBegin = self.getLabelNum("%sLoopBegin%s"%("Tail" if tailLoop else "", loopChar) )
-    loopLabelEnd = self.getLabelNum("%sLoopEnd%s"%("Tail" if tailLoop else "", loopChar) )
+    loopLabelBegin = self.getNamedLabel("%sLoopBegin%s%s"%("Tail" if tailLoop else "", loopChar, "_G2L%s"%subLdsIter if subLdsIter is not None else "" ) )
+    loopLabelEnd = self.getNamedLabel("%sLoopEnd%s%s"%("Tail" if tailLoop else "", loopChar, "_G2L%s"%subLdsIter if subLdsIter is not None else "") )
 
     # is numIter at least 1? otherwise skip to end
     # PGL needs a skip-check here if not bufferload
@@ -5359,15 +5393,24 @@ class KernelWriterAssembly(KernelWriter):
       endCounter =  0
 
     if tailLoop:
-      kStr += inst("s_cmp_le_u32", \
-          loopCounter, \
-          hex(endCounter), \
-          "LoopCounter%s < EndCounter"%(loopChar) )
-      kStr += inst("s_cbranch_scc1 label_%04u"%loopLabelEnd, \
-          "don't enter Loop%s"%loopChar )
+      # if subLdsIter is None:
+      #   for subLdsIter in reversed(range(kernel["DepthULdsDivisor"])):
+      #     startCounter = kernel["DepthU"] - subLdsIter*(kernel["DepthU"]//kernel["DepthULdsDivisor"])
+      #     kStr += inst("s_cmp_le_u32",
+      #                  loopCounter,
+      #                  startCounter,
+      #                  "LoopCounter%s <= G2L buffer %u/%u"%(loopChar, subLdsIter, kernel["DepthULdsDivisor"]) )
+      #     predBranchLabel = self.getNamedLabel("%sLoopBegin%s%s"%("Tail" if tailLoop else "",
+      #                                                             loopChar,
+      #                                                             "_G2L%s"%subLdsIter if subLdsIter is not None else "" ) )
+      #     kStr += inst("s_cbranch_scc1 %s"%predBranchLabel, "branch to sub loop")
+      # kStr += inst("s_cmp_le_u32", \
+      #     loopCounter, \
+      #     hex(endCounter), \
+      #     "LoopCounter%s <= EndCounter"%(loopChar) )
+      # kStr += inst("s_cbranch_scc1 %s"%loopLabelEnd, \
+      #     "don't enter Loop%s"%loopChar )
 
-      kStr += inst("s_mov_b32", sgpr("OrigLoopCounter"), 0, \
-          "repurpose to count each localRead increment")
 
       # LSU not all threads will do summation
       if kernel["LocalSplitU"] > 1:
@@ -5393,7 +5436,7 @@ class KernelWriterAssembly(KernelWriter):
         # thread is active is sgId < numIter % LocalSplitU
 
       # begin loop
-      kStr += "label_%04u:%s" % (loopLabelBegin, self.endLine)
+      kStr += "%s:%s" % (loopLabelBegin, self.endLine)
 
       # LSU mask for this iteration
       if kernel["LocalSplitU"] > 1:
@@ -5426,14 +5469,14 @@ class KernelWriterAssembly(KernelWriter):
               loopCounter, \
               hex(endCounter), \
               "LoopCounter%s < EndCounter"%(loopChar) )
-        kStr += inst("s_cbranch_scc1 label_%04u"%loopLabelEnd, \
+        kStr += inst("s_cbranch_scc1 %s"%loopLabelEnd, \
             "don't enter Loop%s"%loopChar )
 
       if self.prefetchAcrossPersistent and kernel["ExpandPointerSwap"]:
         kStr += inst("","compare if odd-iter return")
         #kStr += inst("s_cbranch_scc1", self.getLabelTarget("LoopCopy2"), "start at oddIter?")
 
-      kStr += "label_%04u:%s" % (loopLabelBegin, self.endLine)
+      kStr += "%s:%s" % (loopLabelBegin, self.endLine)
 
       if loopIdx != self.unrollIdx:
         # reset LRO since these may have changed due to odd-iter exit ?
@@ -5449,8 +5492,15 @@ class KernelWriterAssembly(KernelWriter):
   # Close Loop
   # finalLoop : final unroll loop
   ##############################################################################
-  def closeLoop(self, kernel, loopIdx, finalLoop):
+  def closeLoop(self, kernel, loopIdx, finalLoop, subLdsIter=None, emitEndLabelOnly=False):
     kStr = ""
+    if emitEndLabelOnly:
+      loopIdx = self.unrollIdx
+      loopChar = self.indexChars[ \
+          kernel["ProblemType"]["IndicesSummation"][loopIdx]]
+      kStr += "%s:%s"%(self.getNamedLabel("TailLoopEnd%s"%(loopChar)), self.endLine)
+      return kStr
+
     #kStr += self.indent + self.syncStr + self.endLine
     #kStr += "s_endpgm\n"
     tailLoop = loopIdx < 0
@@ -5458,9 +5508,9 @@ class KernelWriterAssembly(KernelWriter):
       loopIdx = self.unrollIdx
       loopChar = self.indexChars[ \
           kernel["ProblemType"]["IndicesSummation"][loopIdx]]
-      loopLabelBegin = self.getLabelNum("TailLoopBegin%s"%(loopChar) )
-      loopLabelEnd = self.getLabelNum("TailLoopEnd%s"%(loopChar) )
-      loopLabelEndOddExit = self.getLabelNum("TailLoopEnd%s_oddexit"%(loopChar) )
+      loopLabelBegin = self.getNamedLabel("TailLoopBegin%s%s"%(loopChar, "_G2L%s"%subLdsIter if subLdsIter is not None else "") )
+      loopLabelEnd = self.getNamedLabel("TailLoopEnd%s%s"%(loopChar, "_G2L%s"%subLdsIter if subLdsIter is not None else "") )
+      loopLabelEndOddExit = self.getNamedLabel("TailLoopEnd%s_oddexit"%(loopChar) )
       if self.prefetchAcrossPersistent0:
         loopCounter = sgpr("TailLoopCounter")
       else:
@@ -5489,17 +5539,31 @@ class KernelWriterAssembly(KernelWriter):
         hex(unrollInc),
         "inc counter%s"%(loopChar) )
 
+      if subLdsIter is not None:
+        startCounter = (subLdsIter+1)*(kernel["DepthU"]//kernel["DepthULdsDivisor"])
+        kStr += inst("s_cmp_ge_u32", sgpr("OrigLoopCounter"), startCounter, "OrigLoopCounter >= %u (G2L buffer part %u of %u)"%(startCounter, subLdsIter, kernel["DepthULdsDivisor"]) )
+        # if subLdsIter+1 < kernel["DepthULdsDivisor"]:
+        predBranchLabel = self.getNamedLabel("TailLoopEnd%s%s"%(loopChar, "_G2L%u"%(subLdsIter)))
+        # else:
+        #   predBranchLabel = self.getNamedLabel("TailLoopEnd%s"%(loopChar))
+        kStr += inst("s_cbranch_scc1", predBranchLabel, "")
+
       endCounter = 0
+      # if subLdsIter is not None:
+      #   # ex: du=64 divisor=2: 1st tail endCounter=32; 2nd tail endCounter=0
+      #   # ex: du=64 divisor=1: 1st tail endCounter= 0; 2nd tail endCounter=N/A
+      #   endCounter = kernel["DepthU"] - (1+subLdsIter)*kernel["DepthU"]//kernel["DepthULdsDivisor"]
       kStr += inst("s_cmp_le_i32", \
           loopCounter, \
           hex(endCounter), \
-        "counter%s==%d"%(loopChar,endCounter) )
+        "counter%s<=%d"%(loopChar,endCounter) )
+
     else: # not tailloop
       loopChar = self.indexChars[ \
           kernel["ProblemType"]["IndicesSummation"][loopIdx]]
-      loopLabelBegin = self.getLabelNum("LoopBegin%s"%(loopChar) )
-      loopLabelEnd = self.getLabelNum("LoopEnd%s"%(loopChar) )
-      loopLabelEndOddExit = self.getLabelNum("LoopEnd%s_oddexit"%(loopChar) )
+      loopLabelBegin = self.getNamedLabel("LoopBegin%s"%(loopChar) )
+      loopLabelEnd = self.getNamedLabel("LoopEnd%s"%(loopChar) )
+      loopLabelEndOddExit = self.getNamedLabel("LoopEnd%s_oddexit"%(loopChar) )
       loopCounter = self.loopCounter(kernel, loopIdx)
       kStr += self.comment("closeLoop loop%s finalLoop=%d tailLoop=%d" % (loopChar, finalLoop, tailLoop))
 
@@ -5539,9 +5603,9 @@ class KernelWriterAssembly(KernelWriter):
 
     if not finalLoop:
       # just an exit check, else fall through to the next loop copy
-      kStr += inst("s_cbranch_scc1 label_%04u"%(loopLabelEndOddExit), "exit Loop%s"%loopChar )
+      kStr += inst("s_cbranch_scc1 %s"%(loopLabelEndOddExit), "exit Loop%s"%loopChar )
     else: #finalLoop:
-      kStr += inst("s_cbranch_scc0 label_%04u"%loopLabelBegin, \
+      kStr += inst("s_cbranch_scc0 %s"%loopLabelBegin, \
           "restart Loop%s"%(loopChar ))
 
       if tailLoop:
@@ -5584,12 +5648,12 @@ class KernelWriterAssembly(KernelWriter):
           oddIterCode.addText(self.localReadSwapOffsets(kernel, False, self.tPB))
 
         if oddIterCode.count():
-          kStr += inst("s_branch label_%04u"%loopLabelEnd, \
+          kStr += inst("s_branch %s"%loopLabelEnd, \
               "exit unroll loop%s (and skip oddexit)"%(loopChar ))
-        kStr += "label_%04u: // unroll loop odditer exit\n" % (loopLabelEndOddExit)
+        kStr += "%s: // unroll loop odditer exit\n" % (loopLabelEndOddExit)
         kStr += str(oddIterCode)
 
-      kStr += "label_%04u:%s" % (loopLabelEnd, self.endLine)
+      kStr += "%s:%s" % (loopLabelEnd, self.endLine)
 
     # restore all threads
     if tailLoop and kernel["LocalSplitU"] > 1:
@@ -5991,13 +6055,13 @@ class KernelWriterAssembly(KernelWriter):
         else:
           loopChar = self.indexChars[ \
               kernel["ProblemType"]["IndicesSummation"][self.unrollIdx]]
-          labelName = "label_%04d" % self.getLabelNum("LoopEnd%s"%loopChar)
+          labelName = self.getLabelName("LoopEnd%s"%loopChar)
           kStr += inst("s_cbranch_scc1 %s" % labelName,
               "skip to unrollLoop end loop%s iter b/c numIter==0" % loopChar)
       else:
         labelName = "SkipPrefetchAcrossPersistent_OptNLL" if isOptNLL else "SkipPrefetchAcrossPersistent"
-        kStr += inst("s_cbranch_scc1 label_%04u"\
-            % self.getLabelNum(labelName), \
+        kStr += inst("s_cbranch_scc1 %s"\
+            % self.getLabelName(labelName), \
             "skip prefetch loads since numIter==0")
     elif isOptNLL:
       skipOptNLL = self.getNamedLabel("OptNLL_End")
@@ -6149,8 +6213,8 @@ class KernelWriterAssembly(KernelWriter):
           label = self.getNamedLabel("OptNLL_End")
           kStr += "%s:%s" % (label, self.endLine)
         else:
-          label = self.getLabelNum("PrefetchGlobalLastIterEnd")
-          kStr += "label_%04u:%s" % (label, self.endLine)
+          label = self.getNamedLabel("PrefetchGlobalLastIterEnd")
+          kStr += "%s:%s" % (label, self.endLine)
 
     # swap back vgpr pool if any
     if self.savedVgprPool != None:
@@ -7175,7 +7239,7 @@ class KernelWriterAssembly(KernelWriter):
   ##############################################################################
   # Local Write: Do It A/B
   ##############################################################################
-  def localWriteDo(self, kernel, tP, subLdsIter):
+  def localWriteDo(self, kernel, tP, subLdsIter=0):
     if not self.do["LocalWrite"]: return ""
     tc = tP["tensorChar"]
     self.localWriteDoCnt += 1
@@ -7254,9 +7318,9 @@ class KernelWriterAssembly(KernelWriter):
             #print("perp:{}/{} para:{}/{} sPerp:{} sPara:{} loopCnt:{}".format(perp,tP["nrp"],para,tP["nrc"],sPerp,sPara,loopCnt))
             (offset, i, comment) = self.calculateLdsWriteOffset(perp, para, sPerp, sPara, kernel, tP, loopCnt)
 
-            if tP["tlu"]:
+            if subLdsIter is None:
               g2lIdx = i * blockWidth
-            else: # interleave index for TLU=0 case
+            else:
               g2lIdx = (i * kernel["DepthULdsDivisor"] + subLdsIter) * blockWidth
               #print("subLdsIter=%u, g2lIdx = %u, offset: %u"%(subLdsIter, g2lIdx, offset))
 
@@ -7305,6 +7369,7 @@ class KernelWriterAssembly(KernelWriter):
       localWriteCode.addText(self.assert_ne(sgpr("WorkGroup0"),1))
       #localWriteCode.addText(self.bomb())
 
+    # TODO ANT: move those local read related out of localWriteDo()
     self.oriLraA = None
     self.oriLraB = None
     if self.inTailLoop:
