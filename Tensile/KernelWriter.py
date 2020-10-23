@@ -3066,9 +3066,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
   def recalcLocalReadWriteAddressesAB(self, kernel, tPA, tPB, subLdsIter):
     kStr = ""
-
-    kStr += self.recalcLocalWriteAddresses(kernel, tPA, subLdsIter)
-    kStr += self.recalcLocalWriteAddresses(kernel, tPB, subLdsIter)
+    if kernel["DepthULdsDivisor"] > 1:
+      kStr += self.recalcLocalWriteAddresses(kernel, tPA, subLdsIter)
+      kStr += self.recalcLocalWriteAddresses(kernel, tPB, subLdsIter)
     if self.recalcLRCode is None:
       self.recalcLRCode = self.recalcLocalReadAddressesAB(kernel)
     kStr += self.recalcLRCode

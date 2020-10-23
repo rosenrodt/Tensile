@@ -4428,12 +4428,12 @@ class KernelWriterAssembly(KernelWriter):
       if self.inTailLoop:
         subIterReg = self.vgprPool.checkOut(1, "subIterReg")
         kStr += self.comment1("Each wg writes 1/%u of G2L data to LDS"%kernel["DepthULdsDivisor"])
-        kStr += inst("v_lshrrev_b32", vgpr(subIterReg), log2(kernel["_DepthULds"]), vgpr(uReg), "subIter = unrollIdx / DepthU_Compute")
+        kStr += inst("v_lshrrev_b32", vgpr(subIterReg), log2(kernel["_DepthULds"]), vgpr(uReg), "sub_G2L_idx = uIdx / DepthU_Compute")
         kStr += inst("v_and_b32", vgpr(uReg), vgpr(uReg), kernel["_DepthULds"]-1, "unrollIdx = unrollIdx % DepthU_Compute")
         tP["gpr"]["subIterReg"] = subIterReg
       else:
         kStr += self.comment1("Each thd writes 1/%u of G2L data to LDS"%kernel["DepthULdsDivisor"])
-        kStr += inst("v_lshrrev_b32", vgpr(uReg), log2(kernel["DepthULdsDivisor"]), vgpr(uReg), "unrollIdx = unrollIdx / DepthULdsDivisor")
+        kStr += inst("v_lshrrev_b32", vgpr(uReg), log2(kernel["DepthULdsDivisor"]), vgpr(uReg), "sub_G2L_idx = uIdx / DepthULdsDivisor")
     return kStr
 
   ##############################################################################
@@ -4583,23 +4583,17 @@ class KernelWriterAssembly(KernelWriter):
 
       # only for TN tensor + TN lds layout
       assert tP["tlu"] == 0
-      assert kernel["UnrollMajorLDS%s" % tP["tensorChar"]] == True
-      # global read code overfetches N-times of depthU data in case of DepthULdsDivisor>1
-      # only a fraction of workgroup writes data at each compute loop
-      # tmpSgpr = self.getTmpSgpr(2).idx()
-      # kStr += inst("v_cmp_ge_u32", sgpr(tmpSgpr, 2), vgpr(tP["gpr"]["uReg"]), (subLdsIter    ) * kernel["_DepthULds"], "")
-      # kStr += inst("v_cmp_lt_u32",            "vcc", vgpr(tP["gpr"]["uReg"]), (subLdsIter + 1) * kernel["_DepthULds"], "")
-      kStr += inst("v_cmp_eq_u32","vcc", vgpr(tP["gpr"]["subIterReg"]), subLdsIter, "")
+      kStr += inst("v_cmp_eq_u32","vcc", vgpr(tP["gpr"]["subIterReg"]), subLdsIter, "if sub_g2l_idx == %u ?"%subLdsIter)
 
-      tmpVgpr = self.vgprPool.checkOut(1, "tmpVgpr", self.preventVgprOverflowDuringNewTile)
-      kStr += inst("v_mov_b32", vgpr(tmpVgpr), hex(self.LdsOOB), "")
+      ldsOOB = self.vgprPool.checkOut(1, "lds OOB addr", self.preventVgprOverflowDuringNewTile)
+      kStr += inst("v_mov_b32", vgpr(ldsOOB), hex(self.LdsOOB), "lds OOB address")
       kStr += inst("v_cndmask_b32", \
                   vgpr(destVgpr), \
-                  vgpr(tmpVgpr), \
+                  vgpr(ldsOOB), \
                   vgpr(destVgpr), \
                    "vcc", \
-                   "Mask load so out-of-gr-tile bounds returns 0")
-      self.vgprPool.checkIn(tmpVgpr)
+                   "Mask threads not belonging to current sub_g2l_idx by assigning OOB")
+      self.vgprPool.checkIn(ldsOOB)
 
     if kernel["LocalWriteUseSgpr%s"%tc]:
       # TODO: Can refactor code above to Compute this directly:
@@ -5398,24 +5392,18 @@ class KernelWriterAssembly(KernelWriter):
       endCounter =  0
 
     if tailLoop:
-      # if subLdsIter is None:
-      #   for subLdsIter in reversed(range(kernel["DepthULdsDivisor"])):
-      #     startCounter = kernel["_DepthULds"])
-      #     kStr += inst("s_cmp_le_u32",
-      #                  loopCounter,
-      #                  startCounter,
-      #                  "LoopCounter%s <= G2L buffer %u/%u"%(loopChar, subLdsIter, kernel["DepthULdsDivisor"]) )
-      #     predBranchLabel = self.getNamedLabel("%sLoopBegin%s%s"%("Tail" if tailLoop else "",
-      #                                                             loopChar,
-      #                                                             "_G2L%s"%subLdsIter if subLdsIter is not None else "" ) )
-      #     kStr += inst("s_cbranch_scc1 %s"%predBranchLabel, "branch to sub loop")
-      # kStr += inst("s_cmp_le_u32", \
-      #     loopCounter, \
-      #     hex(endCounter), \
-      #     "LoopCounter%s <= EndCounter"%(loopChar) )
-      # kStr += inst("s_cbranch_scc1 %s"%loopLabelEnd, \
-      #     "don't enter Loop%s"%loopChar )
+      # comment out since redundant
+      # """
+      kStr += inst("s_cmp_le_u32", \
+          loopCounter, \
+          hex(endCounter), \
+          "LoopCounter%s < EndCounter"%(loopChar) )
+      kStr += inst("s_cbranch_scc1 %s"%loopLabelEnd, \
+          "don't enter Loop%s"%loopChar )
 
+      kStr += inst("s_mov_b32", sgpr("OrigLoopCounter"), 0, \
+          "repurpose to count each localRead increment")
+      # """
 
       # LSU not all threads will do summation
       if kernel["LocalSplitU"] > 1:
@@ -5544,7 +5532,7 @@ class KernelWriterAssembly(KernelWriter):
         hex(unrollInc),
         "inc counter%s"%(loopChar) )
 
-      if subLdsIter is not None:
+      if kernel["DepthULdsDivisor"] > 1:
         startCounter = (subLdsIter+1)*(kernel["_DepthULds"])
         kStr += inst("s_cmp_ge_u32", sgpr("OrigLoopCounter"), startCounter, "OrigLoopCounter >= %u (G2L buffer part %u of %u)"%(startCounter, subLdsIter, kernel["DepthULdsDivisor"]) )
         # if subLdsIter+1 < kernel["DepthULdsDivisor"]:
@@ -7251,8 +7239,8 @@ class KernelWriterAssembly(KernelWriter):
     tc = tP["tensorChar"]
 
     kStr = ""
-    kStr += self.comment("recalculate LocalWriteAddr")
-    # backUpInst = getattr(self, "localWriteInstructionIdx{}".format(tc)) #
+    kStr += self.comment("recalculate LocalWriteAddr{}".format(tc))
+
     lwvw = getattr(self, "localWriteWidth{}".format(tc))
     newInstIdx = self.selectMemoryInstruction("LocalWrite", lwvw*kernel["DepthULdsDivisor"], \
         kernel["LocalWrite2A"], \

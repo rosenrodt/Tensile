@@ -2032,6 +2032,8 @@ class KernelWriterSource(KernelWriter):
   ##############################################################################
   def closeLoop(self, kernel, loopIdx, finalLoop, subLdsIter=0, emitEndLabelOnly=False):
     kStr = ""
+    if emitEndLabelOnly:
+      return kStr
     problemType = kernel["ProblemType"]
     loopDim = problemType["IndicesSummation"][loopIdx]
     loopChar = self.indexChars[loopDim]
