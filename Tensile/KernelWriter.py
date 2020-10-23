@@ -99,7 +99,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
   # that all necessary dependency are met.  The driver code in kernelBody
   # blindly follows the plan set in unrollLoopHeaderCode and perIterCode
   ##############################################################################
-  def makeSchedule(self, kernel, tensorParametersA, tensorParametersB, localWriteEndIter, subLdsIter):
+  def makeSchedule(self, kernel, tensorParametersA, tensorParametersB, localWriteEndIter, subLdsIter=0):
     # 0x2=print GR and LW code blocks, 0x1= print info messages
     schedDb = 0
 
@@ -238,7 +238,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
       if kernel["DepthULdsDivisor"] > 1:
         itemsGRToSchedLater.extend(itemsGRToSched)
         itemsGRToSched.clear()
-
       readCnt = len(itemsGRToSched)
 
       # Code.printItemList(itemsGRToSched, "!!Debug itemsGRToSched")
@@ -1391,6 +1390,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
           macIterCode.addCode(self.mfmaIter(kernel, luIdx, kernel["InnerUnroll"]))
         else:
           macIterCode.addCode(self.macIter(kernel, luIdx, kernel["InnerUnroll"], True ))
+
       subIterCode = self.makeSubIterSchedule(kernel, localReads, \
                       u, pointerLWCode, pointerLRCode, waitCode, macIterCode, waitLWCode, syncCode, pack[luIdx])
       kl.append(subIterCode)
@@ -1595,9 +1595,23 @@ class KernelWriter(metaclass=abc.ABCMeta):
         self.globalReadIncrements.addCode(Code.Module("globalReadIncrementA"))
         self.globalReadIncrements.addCode(Code.Module("globalReadIncrementB"))
 
+      if self.enable["LocalWrite"]:
+        self.localWriteACode = self.localWriteDo(kernel, tensorParametersA)
+        self.localWriteBCode = self.localWriteDo(kernel, tensorParametersB)
+      else:
+        self.localWriteACode = Code.Module()
+        self.localWriteBCode = Code.Module()
+
       # localWriteEndIter is used to determine which iteration to put sync
       # if PGR=0, GR,LW,sync,LR will put at front of loop.
-      localWriteEndIter = kernel["LoopIters"] - self.numItersPLR - 1 # NOTE ANT: this will be recalc'ed in makeSchedule() if SIA3
+      localWriteEndIter = kernel["LoopIters"] - self.numItersPLR - 1
+
+      # Schedule the global read, global read inc, and writes:
+      unrollLoopHeaderCodeScheduled = False
+      if not kernel["PrefetchGlobalRead"]:
+        unrollLoopHeaderCodeScheduled = True
+        self.makeSchedule(kernel, tensorParametersA, tensorParametersB, localWriteEndIter)
+        kl.append(str(self.unrollLoopHeaderCode))
 
       # if not prefetch global, localWrite before mac's
       if not kernel["PrefetchGlobalRead"]:
@@ -1608,9 +1622,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
           kl.append(self.syncThreads(kernel, "PGR=0, prior iter done reading lds"))
         if self.enable["LocalWrite"]:
           kl.append(self.comment("local write a"))
-          kl.append(self.localWriteDo(kernel, tensorParametersA, 0))
+          kl.append(self.localWriteDo(kernel, tensorParametersA))
           kl.append(self.comment("local write b"))
-          kl.append(self.localWriteDo(kernel, tensorParametersB, 0))
+          kl.append(self.localWriteDo(kernel, tensorParametersB))
         if self.enable["Wait"]:
           kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, "2prefetch wait for local write"))
         if self.enable["Sync"]:
@@ -1656,9 +1670,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
       # unrolled loop: mac iterations
       ############################################################################
 
-      # expand loop size for wider longer depthU read
+      # double/quadruple the number of compute loop for each DepthU's worth of data read
       for uIdx in range(0, kernel["LoopIters"]*kernel["DepthULdsDivisor"]):
-        u = uIdx % kernel["LoopIters"] # u: u-index in compute loop (against the notion of global read loop)
+        u = uIdx % kernel["LoopIters"] # u: u-index in compute loop (in contrast to the notion of global read loop)
         subLdsIter = uIdx // kernel["LoopIters"] # interleaved local write needs this info. ex:
                                               # --> unroll-dim (coalescing global read & local write)
                                               # v0, v1, v2, v3 | v0, v1, v2, v3 | ...
@@ -1683,8 +1697,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
           else:
             self.localWriteACode = Code.Module()
             self.localWriteBCode = Code.Module()
-          self.makeSchedule(kernel, tensorParametersA, tensorParametersB, localWriteEndIter, subLdsIter)
-          kl.append(str(self.unrollLoopHeaderCode))
+          if not unrollLoopHeaderCodeScheduled:
+            self.makeSchedule(kernel, tensorParametersA, tensorParametersB, localWriteEndIter, subLdsIter)
+            kl.append(str(self.unrollLoopHeaderCode))
 
         # which loop iteration to reset the LRO,
         # note if PLR=0, isResetLroIter is False for all u
@@ -2068,7 +2083,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
         # change local write poilcy from interleave-K to fractional as tail loop
         # iterate LDS read address one unit of K at a time
         # change local read policy from wider local read to one unit of K at a time
-        kl.append(self.comment("Recalc local read/write offsets"))
         kl.append(self.recalcLocalReadWriteAddressesAB(kernel, tensorParametersA, tensorParametersB, subLdsIter))
         if self.enable["LocalWrite"]:
           # tail: local write
@@ -2096,9 +2110,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
           kl.append(self.localReadInitPointers(kernel, tensorParametersB))
         # tail: macs
         kl.append(self.comment("tail loop: macs"))
-        # if subLdsIter == 0: # outer most loop
-        #   kl.append(self.openLoop(kernel, -1, None))
-        kl.append(self.openLoop(kernel, -1, subLdsIter))
+        kl.append(self.openLoop(kernel, -1, subLdsIter if kernel["DepthULdsDivisor"]>1 else None))
 
         # Try to use InnerUnroll in the tail loop if allowed:
         KinInnerUnroll = kernel["InnerUnroll"]
@@ -2139,8 +2151,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
           else:
             kl.append(self.macIter(kernel, 0, tailLoopInnerUnroll, True))
         # tail: close
-        kl.append(self.closeLoop(kernel, -1, True, subLdsIter))
-    kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
+        kl.append(self.closeLoop(kernel, -1, True, subLdsIter if kernel["DepthULdsDivisor"]>1 else None))
+
+    if kernel["DepthULdsDivisor"]>1:
+      kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
     # extra summation loops: global increment and close
     for i in reversed(range(self.otherSummationLoops)):
       kl.append(self.comment("global read inc AB"))
@@ -3066,12 +3080,16 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
   def recalcLocalReadWriteAddressesAB(self, kernel, tPA, tPB, subLdsIter):
     kStr = ""
+
     if kernel["DepthULdsDivisor"] > 1:
       kStr += self.recalcLocalWriteAddresses(kernel, tPA, subLdsIter)
       kStr += self.recalcLocalWriteAddresses(kernel, tPB, subLdsIter)
     if self.recalcLRCode is None:
       self.recalcLRCode = self.recalcLocalReadAddressesAB(kernel)
     kStr += self.recalcLRCode
+
+    if len(kStr) > 0:
+      kStr = self.comment("Recalc local read/write offsets") + kStr
 
     return kStr
 

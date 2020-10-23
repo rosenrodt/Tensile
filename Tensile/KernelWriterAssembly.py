@@ -5393,7 +5393,7 @@ class KernelWriterAssembly(KernelWriter):
 
     if tailLoop:
       # comment out since redundant
-      # """
+      """
       kStr += inst("s_cmp_le_u32", \
           loopCounter, \
           hex(endCounter), \
@@ -5403,7 +5403,7 @@ class KernelWriterAssembly(KernelWriter):
 
       kStr += inst("s_mov_b32", sgpr("OrigLoopCounter"), 0, \
           "repurpose to count each localRead increment")
-      # """
+      """
 
       # LSU not all threads will do summation
       if kernel["LocalSplitU"] > 1:
