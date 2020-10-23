@@ -2735,11 +2735,11 @@ class Solution:
         if userDepthU < -3: # for every int below -3, use next doubled value
           userDepthU += 1
           depthU *= 2
-          depthULds *= 2
+          depthULds = 2
           continue
         else: # use this found value
           state["DepthU"] = depthU
-          state["_DepthULds"] = depthULds
+          state["_DepthULds"] = depthU//state["DepthULdsDivisor"]
           break
 
       # this depthU not valid
@@ -2747,7 +2747,7 @@ class Solution:
         # keep looking
         if depthU < maxDepthU:
           depthU += 2
-          depthULds *= 2
+          depthULds = depthU//state["DepthULdsDivisor"]
           continue
         # give up
         else:
