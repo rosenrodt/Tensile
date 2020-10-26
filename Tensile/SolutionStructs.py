@@ -2688,7 +2688,7 @@ class Solution:
       totalVectorsA = totalElementsA // state["GlobalReadVectorWidth"]
       totalVectorsB = totalElementsB // state["GlobalReadVectorWidth"]
 
-      if 1:
+      if 0:
         print("info:", pvar(state, "NumThreads"), pvar(state, "DepthU"), pvar(state, "DepthULdsDivisor"),
                       "TT=%ux%u" % (state["ThreadTile0"], state["ThreadTile1"]),
                       "WG=%ux%u" % (state["WorkGroup"][0], state["WorkGroup"][1]),
@@ -2756,9 +2756,6 @@ class Solution:
     ########################################
     # end DepthU loop
     ########################################
-
-    print("NOTE ANT: DepthU = %u"%state["DepthU"])
-    print("NOTE ANT: _DepthULds = %u"%state["_DepthULds"])
 
     assert(state["DepthU"]> 0)
 
