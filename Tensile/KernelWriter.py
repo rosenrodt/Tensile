@@ -186,9 +186,12 @@ class KernelWriter(metaclass=abc.ABCMeta):
       self.nextLoopLRMfmaIndex = self.barrierMfmaIndex if self.numItersPLR else numMfmaPerIter*kernel["LoopIters"] - self.numMfmaForNextLoopLR - 1
       self.lwEndMfmaIndex = max(self.barrierMfmaIndex - numMfmaBetweenLWandBarrier,0) if self.numItersPLR else numMfmaPerIter*kernel["LoopIters"] - 1
       if kernel["DepthULdsDivisor"] > 1:
-        self.lwEndMfmaIndex += 2 # SplitLDS's schedule looks like:
-                                 # (LW/GR) x N -> (GR address increment) x 2
+        # SplitLDS's schedule looks like: # (LW/GR) x N -> (GR address increment) x 2
+        self.lwEndMfmaIndex = min(self.lwEndMfmaIndex + 2, numMfmaPerIter*kernel["LoopIters"] - 1)
       localWriteEndIter = self.lwEndMfmaIndex//numMfmaPerIter
+      localWriteEndIter = min(kernel["LoopIters"] - 1, localWriteEndIter)
+      assert localWriteEndIter < kernel["LoopIters"]
+      assert self.lwEndMfmaIndex < numMfmaPerIter*kernel["LoopIters"]
     else:
       numGlobalReadInsPerIter = 1
       numLocalWriteModPerIter = 1
@@ -236,12 +239,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
         itemsGRToSched.append(Code.Module())
 
       if kernel["DepthULdsDivisor"] > 1:
-        itemsGRToSchedLater.extend(itemsGRToSched)
+        itemsGRToSchedLater.extend(itemsGRToSched) # GR addr inc after GR code
         itemsGRToSched.clear()
-      readCnt = len(itemsGRToSched)
 
-      # Code.printItemList(itemsGRToSched, "!!Debug itemsGRToSched")
-      # Code.printItemList(itemsGRToSchedLater, "!!Debug itemsGRToSchedLater")
+      readCnt = len(itemsGRToSched)
 
       if kernel["EnableMatrixInstruction"] and kernel["ScheduleIterAlg"] == 3:
         self.grEndMfmaIndex = max(0, roundUp(len(itemsGRToSched)/self.numGlobalReadInsPerMfma) - 1)
@@ -328,23 +329,26 @@ class KernelWriter(metaclass=abc.ABCMeta):
     else:
       # create a plan:
       itemsLWToSched = list(self.localWriteACode.items()) + list(self.localWriteBCode.items())
-      if 1:
-        # This counts the number of modules which contain a ds_write
-        # Scheduler below keeps all writes in the same module in same iteration
-        # so this is better match to what it is trying to do
-        writesToSched = sum(1 for item in itemsLWToSched if item.countType(Code.LocalWriteInst))
-      else:
-        # count the number of writes, this doesn't match how they are
-        # scheduled so pushes writes up too far
-        writesToSched = self.localWriteACode.countType(Code.LocalWriteInst) + \
-                     self.localWriteBCode.countType(Code.LocalWriteInst)
       # piggyback one-by-one each global read instruction on each local write instruction
       if kernel["PrefetchGlobalRead"] == 2 or kernel["DepthULdsDivisor"]>1:
         from itertools import zip_longest
         itemsLWToSched = list(zip_longest(itemsLWToSched, itemsGRToSchedLater, fillvalue=Code.Placeholder()))
-        if kernel["DepthULdsDivisor"]>1:
-          writesToSched += 2 # SplitLDS's schedule looks like:
-                             # (LW/GR) x N -> (GR address increment) x 2
+      try:
+        _filterType = [Code.LocalWriteInst, Code.GlobalReadInst, Code.Module]
+        writesToSched = sum(1 for p, q in itemsLWToSched if p.countTypeList(_filterType) or q.countTypeList(_filterType))
+        if writesToSched == 0:
+          itemsLWToSched = []
+      except TypeError:
+        if 1:
+          # This counts the number of modules which contain a ds_write
+          # Scheduler below keeps all writes in the same module in same iteration
+          # so this is better match to what it is trying to do
+          writesToSched = sum(1 for item in itemsLWToSched if item.countType(Code.LocalWriteInst))
+        else:
+          # count the number of writes, this doesn't match how they are
+          # scheduled so pushes writes up too far
+          writesToSched = self.localWriteACode.countType(Code.LocalWriteInst) + \
+                      self.localWriteBCode.countType(Code.LocalWriteInst)
       # assign schedule index
       if kernel["EnableMatrixInstruction"] and kernel["ScheduleIterAlg"] == 3:
         self.lwStartMfmaIndex = self.lwEndMfmaIndex - roundUp(writesToSched/self.numLocalWriteModPerMfma) + 1
@@ -428,19 +432,17 @@ class KernelWriter(metaclass=abc.ABCMeta):
           try:
             imod.addCode(item[0]) # original LW code
             imod.addCode(item[1]) # GR code piggybacked alongside LW code
-            if not isinstance(item[1], Code.Placeholder) and item[1].count() > 0: # if placeholder, then it does nothing
-              readsToWait = readsToWait + 1
-          except TypeError: # no tuple == no piggybacked code
+            readsToWait = readsToWait + item[1].countType(Code.GlobalReadInst) # GR instruction increments vmcnt
+          except TypeError: # not tuple -> no piggybacked GR code
             imod.addCode(item)
           self.perIterLocalWriteCode[u].addCode(imod)
           try:
             imodNGLL.addCode(copy.deepcopy(item[0]))
-            imodNGLL.addCode(copy.deepcopy(item[1]))
+            #imodNGLL.addCode(copy.deepcopy(item[1])) # omit GR code
           except TypeError:
             imodNGLL.addCode(copy.deepcopy(item))
           self.perIterLocalWriteCodeNGLL[u].addCode(imodNGLL)
         itemsLWToSched = itemsLWToSched[itemPerIter:]
-      # Code.printItemList(self.perIterLocalWriteCode, "!!Debug self.perIterLocalWriteCode")
       # should never run out of items to schedule
       assert not itemsLWToSched # should have scheduled everthing already
 
@@ -1214,7 +1216,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
     kl = []
     pflr     = self.numItersPLR
     localWriteEndIter = kernel["LoopIters"] - self.numItersPLR - 1
-    print("Debug: %s noLoadLoop: localWriteEndIter = %u"%(self.getKernelName(kernel), localWriteEndIter))
+
     if isNGLL:
       kl.append(self.comment3(" NoGlobalLoadLoop - Begin"))
       self.perIterLocalWriteCode = self.perIterLocalWriteCodeNGLL
@@ -1253,6 +1255,11 @@ class KernelWriter(metaclass=abc.ABCMeta):
         else:
           self.localWriteACode = Code.Module()
           self.localWriteBCode = Code.Module()
+        if kernel["PrefetchGlobalRead"] and kernel["LoopIters"] == 1 and subLdsIter > 0:
+          if self.enable["Wait"]:
+            kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, 1, 0, -1, "wait for local write"))
+          if self.enable["Sync"]:
+            kl.append(self.syncThreads(kernel, "sync for local read after write"))
         if not isNGLL:
           # PAP would have GlobalRead and GlobalInc, but no localWrite
           # Get the perIterGlobalReadCode code for PAP (if PAP=On), else would be empty
@@ -1360,22 +1367,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
             pointerLRCode.addText(self.localReadInitPointers(kernel, tensorParametersA))
             pointerLRCode.addText(self.comment("local read init pointers b"))
             pointerLRCode.addText(self.localReadInitPointers(kernel, tensorParametersB))
-
-      # # put barrier at localWriteEndIter+1
-      # if kernel["PrefetchGlobalRead"]:
-      #   if u == localWriteEndIter+1:
-      #     if self.enable["Wait"]:
-      #       waitLWCode.addCode(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, \
-      #           "3wait for local write"))
-      #     if self.enable["Sync"]:
-      #       syncCode.addCode(self.syncThreads(kernel))
-
-      # if isResetLroIter: # ResetLroIter
-      #   if self.enable["LocalRead"]:
-      #     localReads.addText(self.comment("local read init pointers a"))
-      #     localReads.addText(self.localReadInitPointers(kernel, tensorParametersA))
-      #     localReads.addText(self.comment("local read init pointers b"))
-      #     localReads.addText(self.localReadInitPointers(kernel, tensorParametersB))
 
       if self.enable["Wait"]:
         dataAtIter = u - self.numItersPLR
@@ -1690,6 +1681,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
               self.globalReadIncrements = Code.Module()
               self.globalReadIncrements.addCode(Code.Module("globalReadIncrementA"))
               self.globalReadIncrements.addCode(Code.Module("globalReadIncrementB"))
+
           # ...update local write code
           if self.enable["LocalWrite"]:
             self.localWriteACode = self.localWriteDo(kernel, tensorParametersA, (subLdsIter+1)%kernel["DepthULdsDivisor"])  # local write in loopcnt N targets data for loopcnt N+1
@@ -1697,6 +1689,12 @@ class KernelWriter(metaclass=abc.ABCMeta):
           else:
             self.localWriteACode = Code.Module()
             self.localWriteBCode = Code.Module()
+
+          if kernel["PrefetchGlobalRead"] and kernel["LoopIters"] == 1 and subLdsIter > 0:
+            if self.enable["Wait"]:
+              kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, 1, 0, -1, "wait for local write"))
+            if self.enable["Sync"]:
+              kl.append(self.syncThreads(kernel, "sync for local read after write"))
           if not unrollLoopHeaderCodeScheduled:
             self.makeSchedule(kernel, tensorParametersA, tensorParametersB, localWriteEndIter, subLdsIter)
             kl.append(str(self.unrollLoopHeaderCode))

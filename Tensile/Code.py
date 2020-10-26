@@ -133,6 +133,12 @@ class Module(Item):
   def print(self):
     print(self)
 
+  def countTypeList(self, ttypeList):
+    count = 0
+    for ttype in ttypeList:
+      count += self.countType(ttype)
+    return count
+
   def countType(self,ttype):
     """
     Count number of items with specified type in this Module
