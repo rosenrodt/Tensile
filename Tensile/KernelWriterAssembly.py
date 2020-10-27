@@ -4447,7 +4447,7 @@ class KernelWriterAssembly(KernelWriter):
       if kernel["UnrollMajorLDS%s" % tc]:
         lds_stride = kernel["_DepthULds"] + LdsPad
         kStr += inst("v_mul_u32_u24", vgpr(destVgpr), hex(lds_stride), vgpr(tP["gpr"]["lwoT"]), \
-            "lw%s%s**(DepthULds + PAD)"%(tP["tensorChar"], self.unrollChar))
+            "lw%s%s**(DepthU_Compute + PAD)"%(tP["tensorChar"], self.unrollChar))
         kStr += inst("_v_add_lshl_u32", vgpr(destVgpr), vgpr(uReg), vgpr(destVgpr), hex(log2(tP["bpe"])), \
             "lwFO%s = (lw%s%s + lw%s%s*(DepthU+PAD))*bpe" % (tc, tc, tc, tc, self.unrollChar) )
       else:
@@ -5518,12 +5518,9 @@ class KernelWriterAssembly(KernelWriter):
 
       if kernel["DepthULdsDivisor"] > 1:
         startCounter = (subLdsIter+1)*(kernel["_DepthULds"])
-        kStr += inst("s_cmp_ge_u32", sgpr("OrigLoopCounter"), startCounter, "OrigLoopCounter >= %u (G2L buffer part %u of %u)"%(startCounter, subLdsIter, kernel["DepthULdsDivisor"]) )
-        # if subLdsIter+1 < kernel["DepthULdsDivisor"]:
         predBranchLabel = self.getNamedLabel("TailLoopEnd%s%s"%(loopChar, "_G2L%u"%(subLdsIter)))
-        # else:
-        #   predBranchLabel = self.getNamedLabel("TailLoopEnd%s"%(loopChar))
-        kStr += inst("s_cbranch_scc1", predBranchLabel, "")
+        kStr += inst("s_cmp_ge_u32", sgpr("OrigLoopCounter"), startCounter, "OrigLoopCounter >= %u"%(startCounter) )
+        kStr += inst("s_cbranch_scc1", predBranchLabel, "G2L buffer part %u of %u"%(subLdsIter, kernel["DepthULdsDivisor"]))
 
       endCounter = 0
       # if subLdsIter is not None:
