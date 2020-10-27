@@ -2091,7 +2091,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
         kl.append(self.syncThreads(kernel))
 
       # the following read/write addresses could be modified in recalcLocalReadWriteAddressesAB() due to policy change
-      self.recalcLRCode = None
       self.oriLraA = None # back up original local read address vgpr
       self.oriLraB = None
       self.oriLwaA = None # back up original local write address vgpr
@@ -2168,7 +2167,8 @@ class KernelWriter(metaclass=abc.ABCMeta):
           else:
             kl.append(self.macIter(kernel, 0, tailLoopInnerUnroll, True))
         # tail: close
-        kl.append(self.closeLoop(kernel, -1, True, subLdsIter if kernel["DepthULdsDivisor"]>1 else None))
+        finalLoop = subLdsIter == kernel["DepthULdsDivisor"]-1
+        kl.append(self.closeLoop(kernel, -1, finalLoop, subLdsIter if kernel["DepthULdsDivisor"]>1 else None))
 
     if kernel["DepthULdsDivisor"]>1:
       kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
@@ -3097,16 +3097,12 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
   def recalcLocalReadWriteAddressesAB(self, kernel, tPA, tPB, subLdsIter):
     kStr = ""
+    kStr += self.comment("Recalc local read/write offsets")
 
     if kernel["DepthULdsDivisor"] > 1:
       kStr += self.recalcLocalWriteAddresses(kernel, tPA, subLdsIter)
       kStr += self.recalcLocalWriteAddresses(kernel, tPB, subLdsIter)
-    if self.recalcLRCode is None:
-      self.recalcLRCode = self.recalcLocalReadAddressesAB(kernel)
-    kStr += self.recalcLRCode
-
-    if len(kStr) > 0:
-      kStr = self.comment("Recalc local read/write offsets") + kStr
+    kStr += self.recalcLocalReadAddressesAB(kernel)
 
     return kStr
 

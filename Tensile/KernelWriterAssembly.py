@@ -5578,12 +5578,30 @@ class KernelWriterAssembly(KernelWriter):
             hex(endCounter), \
           "counter%s==%d"%(loopChar,endCounter) )
 
-    if not finalLoop:
+    if not finalLoop and not tailLoop:
       # just an exit check, else fall through to the next loop copy
       kStr += inst("s_cbranch_scc1 %s"%(loopLabelEndOddExit), "exit Loop%s"%loopChar )
     else: #finalLoop:
       kStr += inst("s_cbranch_scc0 %s"%loopLabelBegin, \
           "restart Loop%s"%(loopChar ))
+
+      if not tailLoop and loopIdx == self.unrollIdx:
+        oddIterCode = Code.Module()
+        if not kernel["SuppressNoLoadLoop"] and kernel["ExpandPointerSwap"]:
+          # In this case we kept the 'no-load' loop which has LDS offsets assuming first bank of LDS
+          # if we exit the main loop at an odd iter - need to swap LDS read pointers
+          # so the ds_reads read from the 'high' buffer of LDS
+          oddIterCode.addComment1("Select high bank of LDS")
+          oddIterCode.addText(self.localReadSwapOffsets(kernel, False, self.tPA))
+          oddIterCode.addText(self.localReadSwapOffsets(kernel, False, self.tPB))
+
+        if oddIterCode.count():
+          kStr += inst("s_branch %s"%loopLabelEnd, \
+              "exit unroll loop%s (and skip oddexit)"%(loopChar ))
+        kStr += "%s: // unroll loop odditer exit\n" % (loopLabelEndOddExit)
+        kStr += str(oddIterCode)
+
+      kStr += "%s:%s" % (loopLabelEnd, self.endLine)
 
       if tailLoop:
         if kernel["PersistentKernel"] or len(kernel["ProblemType"]["IndicesSummation"]) > 1:
@@ -5620,23 +5638,6 @@ class KernelWriterAssembly(KernelWriter):
               kStr += inst("s_mov_b32", sgpr(stmp), inc, "tailloop lds offset")
               kStr += inst("s_mul_i32", sgpr(stmp), sgpr("OrigLoopCounter"), sgpr(stmp), "scale by mul")
               kStr += inst("v_sub_u32", vgpr("LocalReadAddr%s"%tc), vgpr("LocalReadAddr%s"%tc), sgpr(stmp), "remove lro damage")
-      elif loopIdx == self.unrollIdx:
-        oddIterCode = Code.Module()
-        if not kernel["SuppressNoLoadLoop"] and kernel["ExpandPointerSwap"]:
-          # In this case we kept the 'no-load' loop which has LDS offsets assuming first bank of LDS
-          # if we exit the main loop at an odd iter - need to swap LDS read pointers
-          # so the ds_reads read from the 'high' buffer of LDS
-          oddIterCode.addComment1("Select high bank of LDS")
-          oddIterCode.addText(self.localReadSwapOffsets(kernel, False, self.tPA))
-          oddIterCode.addText(self.localReadSwapOffsets(kernel, False, self.tPB))
-
-        if oddIterCode.count():
-          kStr += inst("s_branch %s"%loopLabelEnd, \
-              "exit unroll loop%s (and skip oddexit)"%(loopChar ))
-        kStr += "%s: // unroll loop odditer exit\n" % (loopLabelEndOddExit)
-        kStr += str(oddIterCode)
-
-      kStr += "%s:%s" % (loopLabelEnd, self.endLine)
 
     # restore all threads
     if tailLoop and kernel["LocalSplitU"] > 1:
@@ -7233,9 +7234,9 @@ class KernelWriterAssembly(KernelWriter):
     tP["localWriteInstruction"] = self.memoryInstructions[self.version]["LocalWrite"][newInstIdx]
 
     if kernel["PersistentKernel"]:
-      if getattr(self, "oriLwa{}".format(tc)) is None:
-        setattr(self, "oriLwa{}".format(tc), self.vgprPool.checkOut(1, "OriLocalWriteddr{}".format(tc)) )
-        kStr += inst("v_mov_b32", vgpr(getattr(self, "oriLwa{}".format(tc)), vgpr("LocalReadAddrA"), "back up LWA for persistent kernel + wider local read"))
+      if getattr(self, "oriLwa%s"%tc) is None:
+        setattr(self, "oriLwa%s"%tc, self.vgprPool.checkOut(1, "OriLocalWriteddr%s"%tc) )
+        kStr += inst("v_mov_b32", vgpr(getattr(self, "oriLwa%s"%tc)), vgpr("LocalWriteAddr%s"%tc), "back up LWA for persistent kernel + wider local read")
 
     # global read tile assignment
     kStr += self.graTileAssignment(kernel, tP)
