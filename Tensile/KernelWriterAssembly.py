@@ -1450,24 +1450,25 @@ class KernelWriterAssembly(KernelWriter):
       self.serializedStore = True # TODO: make serialized store default with MI kernels
       self.numVgprValuC = 0
 
-    self.startVgprValuA = vgprIdx; vgprIdx += numVgprValuA
-
     PLR = kernel["PrefetchLocalRead"] if kernel["PrefetchLocalRead"] < kernel["LoopIters"] else kernel["LoopIters"] - 1
     valuBlocks = (1+PLR) * kernel["InnerUnroll"]
+
+    self.startVgprValuA = vgprIdx; vgprIdx += numVgprValuA
+    self.startVgprG2LA = None
     if not kernel["DirectToLdsA"] or self.do["KeepDirectToLdsAlloc"]:
       # if PGR = True, PAP coubld be possibly enabled, we move G2LA later to prevent it from being reclaimed
       # otherwise, put G2L here since it can overlap valu
-      if not kernel["PrefetchGlobalRead"]: # g2l can overlap valu
+      if not kernel["PrefetchGlobalRead"] and kernel["DepthULdsDivisor"] == 1: # g2l can overlap valu
         self.startVgprG2LA = self.startVgprValuA
         vgprIdx = self.startVgprValuA \
             + max(self.numVgprValuAPerBlock*valuBlocks, self.numVgprG2LA)
 
     self.startVgprValuB = vgprIdx; vgprIdx += numVgprValuB
-
+    self.startVgprG2LB = None
     if not kernel["DirectToLdsB"] or self.do["KeepDirectToLdsAlloc"]:
       # if PGR = True, PAP coubld be possibly enabled, we move G2LB later to prevent it from being reclaimed
       # otherwise, put G2L here since it can overlap valu
-      if not kernel["PrefetchGlobalRead"]: # g2l can overlap valu
+      if not kernel["PrefetchGlobalRead"] and kernel["DepthULdsDivisor"] == 1: # g2l can overlap valu
         self.startVgprG2LB = self.startVgprValuB
         vgprIdx = self.startVgprValuB \
             + max(self.numVgprValuBPerBlock*valuBlocks, self.numVgprG2LB)
@@ -1548,15 +1549,11 @@ class KernelWriterAssembly(KernelWriter):
     vgprIdx += numVgprGlobalReadIncsB
     #-----------
 
-    if not kernel["DirectToLdsA"] or self.do["KeepDirectToLdsAlloc"]:
-      # prefetchAcrossPersistent is true only when PGR is true
-      if kernel["PrefetchGlobalRead"]:
-        self.startVgprG2LA = vgprIdx; vgprIdx += self.numVgprG2LA
+    if self.startVgprG2LA is None:
+      self.startVgprG2LA = vgprIdx; vgprIdx += self.numVgprG2LA
 
-    if not kernel["DirectToLdsB"] or self.do["KeepDirectToLdsAlloc"]:
-      # prefetchAcrossPersistent is true only when PGR is true
-      if kernel["PrefetchGlobalRead"]:
-        self.startVgprG2LB = vgprIdx; vgprIdx += self.numVgprG2LB
+    if self.startVgprG2LB is None:
+      self.startVgprG2LB = vgprIdx; vgprIdx += self.numVgprG2LB
 
     # Check if PAP or not,
     # if not PAP GlobalRead, LocalWrite, LocalRead, G2L can be reclaimed, extend the "lastVgprForReads" value
@@ -7268,7 +7265,10 @@ class KernelWriterAssembly(KernelWriter):
       # In 1 block MI, it remap localReadAddr in order to let each thread wider local read continous k
       # this decrease performance since it require more loop to hadle continous k in eanch thread.
       # recalculate localReadAddr to cancle wider local read in tail loop
-      if (self.numReadsIterCoalescedA > 1 or self.numReadsIterCoalescedB > 1) and kernel["MatrixInstB"] == 1: #and tP["isB"]:
+      # TODO: If DepthULdsDivisor>1, local read addr is incremented for each K the loop iterates, which
+      # upon second sub-loop needs to be reset to its original value. Backing up local read address would
+      # be nicer than recomputing them
+      if kernel["DepthULdsDivisor"] > 1 or ((self.numReadsIterCoalescedA > 1 or self.numReadsIterCoalescedB > 1) and kernel["MatrixInstB"] == 1): #and tP["isB"]:
         self.numReadsIterCoalescedA = 1
         self.numReadsIterCoalescedB = 1
         self.lrvwA = kernel["ProblemType"]["DataType"].numMIInput()

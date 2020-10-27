@@ -2439,6 +2439,8 @@ class Solution:
       # EPS not supported with PAP yet
       if state["PrefetchAcrossPersistent"]:
         state["ExpandPointerSwap"] = 0
+      if state["DepthULdsDivisor"] > 1:
+        state["ExpandPointerSwap"] = 0
 
     #print("PackedC0IdxChars", state["PackedC0IdxChars"])
     #print("PackedC1IdxChars", state["PackedC1IdxChars"])

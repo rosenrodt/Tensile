@@ -1698,7 +1698,23 @@ class KernelWriter(metaclass=abc.ABCMeta):
           if not unrollLoopHeaderCodeScheduled:
             self.makeSchedule(kernel, tensorParametersA, tensorParametersB, localWriteEndIter, subLdsIter)
             kl.append(str(self.unrollLoopHeaderCode))
+        # end 1st of subloop
 
+        if subLdsIter<kernel["DepthULdsDivisor"]-1 and u==kernel["LoopIters"]-1 and not kernel["PrefetchGlobalRead"]:
+          # unrolled loop: local write A, B
+          if self.enable["Wait"]:
+            kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, -1, 0, "5wait for local read"))
+          if self.enable["Sync"]:
+            kl.append(self.syncThreads(kernel, "PGR=0, prior iter done reading lds"))
+          if self.enable["LocalWrite"]:
+            kl.append(self.comment("local write a"))
+            kl.append(self.localWriteDo(kernel, tensorParametersA, (subLdsIter+1)%kernel["DepthULdsDivisor"]))
+            kl.append(self.comment("local write b"))
+            kl.append(self.localWriteDo(kernel, tensorParametersB, (subLdsIter+1)%kernel["DepthULdsDivisor"]))
+          if self.enable["Wait"]:
+            kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, "2prefetch wait for local write"))
+          if self.enable["Sync"]:
+            kl.append(self.syncThreads(kernel))
         # which loop iteration to reset the LRO,
         # note if PLR=0, isResetLroIter is False for all u
         isResetLroIter = (u == localWriteEndIter)
@@ -1736,6 +1752,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
           # reads for next loop
           doReadA = doReadA or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
           doReadB = doReadB or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
+          # reads for next loop special case: splitLDS in PGR=0 in all but the last compute loop
+          doReadA = doReadA or (not kernel["PrefetchGlobalRead"] and subLdsIter<kernel["DepthULdsDivisor"]-1)
+          doReadB = doReadB or (not kernel["PrefetchGlobalRead"] and subLdsIter<kernel["DepthULdsDivisor"]-1)
           for iui in range(0,kernel["InnerUnroll"]):
             doReadA = doReadA and iui*self.numReadsIterCoalescedA < kernel["InnerUnroll"]
             doReadB = doReadB and iui*self.numReadsIterCoalescedB < kernel["InnerUnroll"]
