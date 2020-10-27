@@ -7244,6 +7244,10 @@ class KernelWriterAssembly(KernelWriter):
     # global read unroll offsets
     kStr += self.graUnrollOffsets(kernel, tP)
 
+    # still needed for vgpr resource management
+    # intentionally not emitting code
+    self.graFinalOffsets(kernel, tP)
+
     # local write tile assignments
     kStr += self.lwaTileAssignment(kernel, tP)
     # local write unroll assignments
