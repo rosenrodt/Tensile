@@ -2444,6 +2444,13 @@ class Solution:
 
     #print("PackedC0IdxChars", state["PackedC0IdxChars"])
     #print("PackedC1IdxChars", state["PackedC1IdxChars"])
+    if state["DepthULdsDivisor"] > 1:
+      if state["PrefetchGlobalRead"] == 2:
+        reject(state, "DepthULdsDivisor > 1 does not support PrefetchGlobalRead=2")
+      if state["ScheduleIterAlg"] != 3:
+        reject(state, "DepthULdsDivisor > 1 does not support SchedulIterAlg other than 3")
+      if state["DirectToLds"] == True:
+        reject(state, "DepthULdsDivisor > 1 does not support DirectToLds")
 
     # Set up stagger shift:
     bpeAB = int(4*state["ProblemType"]["DataType"].numRegisters())
