@@ -6038,13 +6038,13 @@ class KernelWriterAssembly(KernelWriter):
         else:
           loopChar = self.indexChars[ \
               kernel["ProblemType"]["IndicesSummation"][self.unrollIdx]]
-          labelName = self.getLabelName("LoopEnd%s"%loopChar)
+          labelName = self.getNamedLabel("LoopEnd%s"%loopChar)
           kStr += inst("s_cbranch_scc1 %s" % labelName,
               "skip to unrollLoop end loop%s iter b/c numIter==0" % loopChar)
       else:
         labelName = "SkipPrefetchAcrossPersistent_OptNLL" if isOptNLL else "SkipPrefetchAcrossPersistent"
         kStr += inst("s_cbranch_scc1 %s"\
-            % self.getLabelName(labelName), \
+            % self.getNamedLabel(labelName), \
             "skip prefetch loads since numIter==0")
     elif isOptNLL:
       skipOptNLL = self.getNamedLabel("OptNLL_End")
@@ -6108,7 +6108,7 @@ class KernelWriterAssembly(KernelWriter):
           "skip if tail loop required")
 
       # The prefetch across persistent for OptNLL case
-      if self.prefetchAcrossPersistent:
+      if self.prefetchAcrossPersistent: # can we use isPap input arg?
         kStr += str(self.openPrefetchAcrossPersistent(kernel, isOptNLL=True))
         newTileCodes = self.setupNewTile(kernel, self.tPA, self.tPB, isPap=True, isOptNLL=True)
         codes = '\n'.join([str(x) for x in newTileCodes])
@@ -6166,9 +6166,9 @@ class KernelWriterAssembly(KernelWriter):
           # If is PAP inside OptNLL: Swap the LRO:
           if self.prefetchAcrossPersistent:
             expand = kernel["ExpandPointerSwap"]
-            kStr += self.comment("local read swap offsets a")
+            kStr += self.comment("local read swap offsets a (prefetchAcrossPersistent)")
             kStr += self.localReadSwapOffsets(kernel, expand, self.tPA)
-            kStr += self.comment("local read swap offsets b")
+            kStr += self.comment("local read swap offsets b (prefetchAcrossPersistent)")
             kStr += self.localReadSwapOffsets(kernel, expand, self.tPB)
           # else:
           # # TODO ANT: double check this

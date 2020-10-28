@@ -1249,6 +1249,15 @@ class KernelWriter(metaclass=abc.ABCMeta):
       subLdsIter = uIdx // kernel["LoopIters"]
       isLastLoop = (subLdsIter == kernel["DepthULdsDivisor"] -1 ) and not isNGLL
       if u == 0:
+        if subLdsIter > 0:
+          if self.enable["GlobalRead"]:
+            assert len(self.globalReadACode.items()) > 0 and len(self.globalReadBCode.items()) > 0 # already issued in first subLdsIter
+            self.globalReadACode = Code.StructuredModule() # empty
+            self.globalReadBCode = Code.StructuredModule() # empty
+          if self.enable["GlobalReadInc"]:
+            self.globalReadIncrements = Code.Module() # empty
+            self.globalReadIncrements.addCode(Code.Module("globalReadIncrementA"))
+            self.globalReadIncrements.addCode(Code.Module("globalReadIncrementB"))
         if subLdsIter==0 and kernel["DepthULdsDivisor"]>1: # if at start of subloop, update local write code
           self.localWriteACode = self.localWriteDo(kernel, tensorParametersA, (subLdsIter+1)%kernel["DepthULdsDivisor"])  # local write in loopcnt N targets data for loopcnt N+1
           self.localWriteBCode = self.localWriteDo(kernel, tensorParametersB, (subLdsIter+1)%kernel["DepthULdsDivisor"])
