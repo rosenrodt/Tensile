@@ -2178,9 +2178,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
         # tail: close
         finalLoop = subLdsIter == kernel["DepthULdsDivisor"]-1
         kl.append(self.closeLoop(kernel, -1, finalLoop, subLdsIter if kernel["DepthULdsDivisor"]>1 else None))
-
     if kernel["DepthULdsDivisor"]>1:
       kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
+    self.inTailLoop = False
+
     # extra summation loops: global increment and close
     for i in reversed(range(self.otherSummationLoops)):
       kl.append(self.comment("global read inc AB"))

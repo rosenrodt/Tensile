@@ -4621,7 +4621,8 @@ class KernelWriterAssembly(KernelWriter):
     self.vgprPool.checkIn(tP["gpr"]["uReg"])
     tP["gpr"]["uReg"] = None
     if "subIterReg" in tP["gpr"]:
-      self.vgprPool.checkIn(tP["gpr"]["subIterReg"])
+      if tP["gpr"]["subIterReg"] is not None:
+        self.vgprPool.checkIn(tP["gpr"]["subIterReg"])
       tP["gpr"]["subIterReg"] = None
     # dump lds write offsets
     #if tP["isA"]:
@@ -11715,7 +11716,7 @@ class KernelWriterAssembly(KernelWriter):
     if kernel["PersistentKernelAlongBatch"]:
       imod.addInst("s_mul_i32", sgpr(stmp), sgpr(stmp), sgpr("NumWorkGroups2"), "Total WG-0 x 1 x 2")
     imod.addInst("s_cmp_ge_u32", sgpr("SerialWorkGroupIter"), sgpr(stmp), "outside legal WG?")
-    imod.addInst("s_cbranch_scc1", self.getLabelTarget(label), "skip pf if OOB")
+    imod.addInst("s_cbranch_scc1", self.getNamedLabel(label), "skip pf if OOB")
     #imod.addInst("s_branch", self.getLabelTarget("SkipPrefetchAcrossPersistent"), "skip pf if OOB")
     return imod
 
@@ -11725,7 +11726,7 @@ class KernelWriterAssembly(KernelWriter):
     label = "SkipPrefetchAcrossPersistent_OptNLL" if isOptNLL else "SkipPrefetchAcrossPersistent"
     imod = Code.Module()
     # imod.addCode(Code.WaitCnt(self.version, 0,0, "bozo, conservative wait"))
-    imod.addCode(Code.Label(self.getLabelNum(label), "SkipPrefetchAcrossPersistent"))
+    imod.addCode("%s: //%s"%(self.getNamedLabel(label), "SkipPrefetchAcrossPersistent"))
     imod.addCode(self.comment3("PrefetchAcrossPersistent - Close"))
     #imod.addText(self.bomb())
     return imod
