@@ -865,6 +865,17 @@ validParameters = {
     # -2 : Only allow max(GLVWA,GLVWB) < VW ?
     # -3 : Only allow min(GLVWA,GLVWB) < VW ?
     "DepthU":                     depthUs,
+
+    # DepthULdsDivisor determines how we pipelines the data from global memory to LDS
+    # Instead of writing all the data in the in-flight register buffer (G2L) to the LDS at once, we divide the G2L buffer into N portions and
+    # write each portion of the G2L to LDS, read from LDS and do the actual matrix mul, before write the rest of the portions and so on.
+    # This helps cut down LDS usage by the value of the divisor. Helps increase CU occupancy or DepthU if previously LDS resource bound.
+    #
+    # The premise of this parameter is to be able to fetch all 256B (equivalent to 128 half's or 64 single's) in a TN laid-out problem size,
+    # maximizing L2 channel efficiency, therefore this parameter only works for TN buffer layout
+    #
+    # Implementation-wise, for now it only supports ScheduleIterAlg=3 and TransposeLDS=1
+    # In addition, it does not work with DirectToLds=1 because it needs the in-flight data to reside on registers
     "DepthULdsDivisor":           [1, 2, 4, 8],
 
     # integer ammount of padding to put into LDS, in 2016 this didn't seem to help performance, profilers were showing that channel conflicts weren't really hurting

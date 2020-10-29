@@ -7410,6 +7410,11 @@ class KernelWriterAssembly(KernelWriter):
             if subLdsIter is None:
               g2lIdx = i * blockWidth
             else:
+              # Example: DepthULdsDivisor=2
+              # v0, v1, v2, v3 | v0, v1, v2, v3 | ... ----> unroll dim
+              # -----Thd 0----- -----Thd 1-----   ...
+              # 1st subloop writes v0,v1 to LDS
+              # 2nd subloop writes v2,v3 to LDS
               g2lIdx = (i * kernel["DepthULdsDivisor"] + subLdsIter) * blockWidth
               #print("subLdsIter=%u, g2lIdx = %u, offset: %u"%(subLdsIter, g2lIdx, offset))
 

@@ -1673,12 +1673,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
       # double/quadruple the number of compute loop for each DepthU's worth of data read
       for uIdx in range(0, kernel["LoopIters"]*kernel["DepthULdsDivisor"]):
         u = uIdx % kernel["LoopIters"] # u: u-index in compute loop (in contrast to the notion of global read loop)
-        subLdsIter = uIdx // kernel["LoopIters"] # interleaved local write needs this info. ex:
-                                              # --> unroll-dim (coalescing global read & local write)
-                                              # v0, v1, v2, v3 | v0, v1, v2, v3 | ...
-                                              # -----Thd 0----- -----Thd 1-----   ...
-                                              # 1st subloop writes v0,v1 to LDS
-                                              # 2nd subloop writes v2,v3 to LDS
+        subLdsIter = uIdx // kernel["LoopIters"]
         if u==0: # if at start of subloop...
           # ...do not issue global reads if not in first subLdsIter
           if subLdsIter > 0:
