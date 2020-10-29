@@ -1704,7 +1704,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
             kl.append(str(self.unrollLoopHeaderCode))
         # end 1st of subloop
 
-        if subLdsIter<kernel["DepthULdsDivisor"]-1 and u==kernel["LoopIters"]-1 and not kernel["PrefetchGlobalRead"]:
+        if subLdsIter<kernel["DepthULdsDivisor"]-1 and u==kernel["LoopIters"]-self.numItersPLR and not kernel["PrefetchGlobalRead"]:
           # unrolled loop: local write A, B
           if self.enable["Wait"]:
             kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, -1, 0, "5wait for local read"))
@@ -1750,15 +1750,13 @@ class KernelWriter(metaclass=abc.ABCMeta):
         syncCode = Code.Module()
 
         if self.enable["LocalRead"]:
+          hasLiveLdsData = kernel["PrefetchGlobalRead"] or (subLdsIter < kernel["DepthULdsDivisor"]-1)
           # reads for current loop are done in previous iteration because of wider local read
           doReadA = (u < kernel["LoopIters"]/self.numIterPerCoalescedReadA - self.numItersPLR)
           doReadB = (u < kernel["LoopIters"]/self.numIterPerCoalescedReadB - self.numItersPLR)
           # reads for next loop
-          doReadA = doReadA or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
-          doReadB = doReadB or (kernel["PrefetchGlobalRead"] and u > localWriteEndIter)
-          # reads for next loop special case: splitLDS in PGR=0 in all but the last compute loop
-          doReadA = doReadA or (not kernel["PrefetchGlobalRead"] and subLdsIter<kernel["DepthULdsDivisor"]-1)
-          doReadB = doReadB or (not kernel["PrefetchGlobalRead"] and subLdsIter<kernel["DepthULdsDivisor"]-1)
+          doReadA = doReadA or (hasLiveLdsData and u > localWriteEndIter)
+          doReadB = doReadB or (hasLiveLdsData and u > localWriteEndIter)
           for iui in range(0,kernel["InnerUnroll"]):
             doReadA = doReadA and iui*self.numReadsIterCoalescedA < kernel["InnerUnroll"]
             doReadB = doReadB and iui*self.numReadsIterCoalescedB < kernel["InnerUnroll"]
