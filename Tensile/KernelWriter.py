@@ -2109,6 +2109,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
         # iterate LDS read address one unit of K at a time
         # change local read policy from wider local read to one unit of K at a time
         kl.append(self.recalcLocalReadWriteAddressesAB(kernel, tensorParametersA, tensorParametersB, subLdsIter))
+        if self.enable["Sync"]:
+          if subLdsIter > 0:
+            kl.append(self.comment("sync before local write"))
+            kl.append(self.syncThreads(kernel))
         if self.enable["LocalWrite"]:
           # tail: local write
           kl.append(self.localWriteInitPointers(kernel, tensorParametersA))
