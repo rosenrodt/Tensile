@@ -1,0 +1,111 @@
+GlobalParameters:
+  NumElementsToValidate: 16384
+  KernelTime: True
+  DataInitTypeAlpha: 1
+  DataInitTypeBeta: 0
+  EnqueuesPerSync: 10
+  NewClient: 2
+  PrintSolutionRejectionReason: True
+  MergeFiles: False
+  DataInitTypeAB: 1
+  # ForceGenerateKernel: True
+  CSVExportWinner: True
+BenchmarkProblems:
+  ########################################
+  # TN - standard
+  ########################################
+  -
+    - # ProblemType
+      OperationType: GEMM
+      DataType: h
+      # DestDataType: B
+      # ComputeDataType: s
+      HighPrecisionAccumulate: True
+      TransposeA: True
+      TransposeB: False
+      UseBeta: True
+      Batched: True
+    - # BenchmarkProblemSizeGroup - Standard
+      InitialSolutionParameters:
+      BenchmarkCommonParameters:
+        - KernelLanguage: ["Assembly"]
+        - EdgeType: ["ShiftPtr"]
+      ForkParameters:
+        - MatrixInstruction:
+          # - [32, 32, 4, 2,  2,  1,1,  1,4]  # 64x128
+          # - [32, 32, 4, 2,  2,  1,1,  2,2]  # 128x64
+          # [32, 32, 4, 2,  2,  2,1,  1,4]  # 128x128
+          # - [32, 32, 4, 2,  2,  2,2,  1,4]  # 128x256
+          # - [32, 32, 4, 2,  2,  2,2,  2,2]  # 256x128
+          # - [32, 32, 4, 2,  2,  2,4,  2,2]  # 256x256
+          # - [32, 32, 8, 1,  1,  1,1,  2,2]  # 64x64
+          # - [32, 32, 8, 1,  1,  1,2,  2,2]  # 64x128
+          # - [32, 32, 8, 1,  1,  2,1,  2,2]  # 128x64
+          - [32, 32, 8, 1,  1,  2,2,  2,2]  # 128x128
+          # [32, 32, 8, 1,  1,  4,1,  1,4]  # 128x128 storeRemap optimized
+          # - [32, 32, 8, 1,  1,  2,4,  2,2]  # 128x256
+          # - [32, 32, 8, 1,  1,  4,2,  2,2]  # 256x128
+          # - [32, 32, 8, 1,  1,  4,4,  2,2]  # 256x256
+          # - [16, 16, 16, 1,  1,  1,1,  2,2] # 32x32
+          # - [16, 16, 16, 1,  1,  1,2,  2,2] # 32x64
+          # - [16, 16, 16, 1,  1,  2,1,  2,2] # 64x32
+          # Specialized MT
+          # [32, 32, 8, 1,  1,  1,9,  4,1]  # 128x288
+          # - [16, 16, 16,1,  1,  2,9,  4,1]  # 128x144
+          # - [16, 16, 16,1,  1,  4,9,  4,1]  # 256x144
+          # - [16, 16, 16,1,  1,  2,5,  4,1]  # 128x80
+          # - [32, 32, 8, 1,  1,  1,3,  4,1]  # 128x96
+          # - [32, 32, 8, 1,  1,  1,5,  4,1]  # 128x160
+          # - [16, 16, 16,1,  1,  1,5,  4,1]  # 64x80
+          # - [32, 32, 8, 1,  1,  5,1,  1,4]  # 160x128
+        - ThreadTile:
+          - [ 1, 32 ]
+        - WorkGroup:
+          - [ 64, 4, 1 ]
+        # - AssertFree0ElementMultiple: [8]
+        - PrefetchGlobalRead: [1]
+        - PrefetchLocalRead: [5]
+        - DepthU: [64]
+        - VectorWidth: [2]
+        - GlobalReadVectorWidth: [8]
+        - LocalReadVectorWidth: [8]
+        - SuppressNoLoadLoop: [0]
+        - OptNoLoadLoop: [0]
+        - ScheduleIterAlg: [3]
+        # - InnerUnroll: [1,2,4]
+        # - ExpandPointerSwap: [0,1]
+        - TransposeLDS: [1]
+        - LdsBlockSizePerPad: [-1]
+        - DepthULdsDivisor: [2]
+        - LdsPadA: [-1]
+        - LdsPadB: [-1]
+        - StoreRemapVectorWidth: [4]
+        # MaxOccupancy: [2,3]
+        # - StaggerUMapping: [0]
+        # StaggerUStride: [128,256]
+        # StaggerU: [0,16,32]
+        # WorkGroupMapping: [1,2,8,10]
+        - WaveSeparateGlobalReadA: [1]
+        - WaveSeparateGlobalReadB: [1]
+        - 1LDSBuffer: [0]
+      BenchmarkJoinParameters:
+      BenchmarkFinalParameters:
+        - ProblemSizes:
+          # Exact: [ 7680, 8192, 1, 8192, 8384, 8384, 8384, 8384 ] #gemm
+          # - Exact: [ 3840, 4096, 1, 4096, 4192, 4192, 4192, 4192 ] #gemm
+          # - Exact: [ 1920, 2048, 1, 2048, 2080, 2080, 2080, 2080 ] #gemm
+          # - Exact: [ 960, 1024, 1, 1024, 1056, 1056, 1056, 1056 ] #gemm
+          # - Exact: [ 480, 512, 1, 512, 544, 544, 544, 544 ] #gemm
+          - Exact: [ 64, 128, 1, 128, 544, 544, 544, 544 ] #gemm
+          # - Exact: [4096, 1280, 1, 1024] # BERT
+          # - Exact: [1024, 4992, 1, 4096]
+          # - Exact: [1024, 5248, 1, 4096]
+          # - Exact: [256, 21504, 1, 1024]
+          # - Exact: [256, 22016, 1, 1024]
+          # - Exact: [256, 22344, 1, 1024]
+          # - Exact: [2560, 2048, 1, 2560]
+#LibraryLogic:
+#    ScheduleName: "arcturus"
+#    DeviceNames: ["Device 7380", "Device 7388", "Device 738c", "Device 7390"]
+#    ArchitectureName: "gfx908"
+

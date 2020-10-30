@@ -1,0 +1,150 @@
+TestParameters:
+  marks: [skip-gfx900, skip-gfx906, skip-gfx1010, skip-gfx1011] # not supported by arch
+
+GlobalParameters:
+  NumElementsToValidate: 65536
+  KernelTime: True
+  NewClient: 2
+  PrintSolutionRejectionReason: True
+BenchmarkProblems:
+
+  ########################################
+  # TN - standard
+  ########################################
+  -
+    - # ProblemType
+      OperationType: GEMM
+      DataType: h
+      HighPrecisionAccumulate: True
+      TransposeA: True
+      TransposeB: False
+      UseBeta: True
+      Batched: True
+
+    - # BenchmarkProblemSizeGroup - Standard
+      InitialSolutionParameters:
+      BenchmarkCommonParameters:
+        - KernelLanguage: ["Assembly"]
+        - EdgeType: ["ShiftPtr"]
+      ForkParameters:
+        - TransposeLDS: [1]
+        - MatrixInstruction:
+          - [32, 32, 8, 1]
+        - PrefetchLocalRead: [0]
+        - PrefetchGlobalRead: [0,1]
+        - ThreadTile:
+          - [ 2, 32 ]
+        - WorkGroup:
+          - [  16,16, 1 ]
+        - WorkGroupMapping: [8]
+        - GlobalSplitU: [1]
+        - InnerUnroll: [1]
+        - DepthU: [64]
+        - DepthULdsDivisor: [2]
+        - ScheduleIterAlg: [3]
+        - VectorWidth: [8]
+        # PersistentKernel: [0, 1]
+        # PersistentKernelAlongBatch: [1]
+        # PrefetchAcrossPersistent: [0,1]
+        # GlobalSplitUAlgorithm: ["SingleBuffer", "MultipleBuffer"]
+        # GlobalSplitU: [2, 5, 15]
+      JoinParameters:
+      BenchmarkJoinParameters:
+      BenchmarkFinalParameters:
+        - ProblemSizes:
+          - Range: [ [1024], [1024], [1], [1024] ]
+
+    # - # BenchmarkProblemSizeGroup - Standard
+    #   InitialSolutionParameters:
+    #   BenchmarkCommonParameters:
+    #     - KernelLanguage: ["Assembly"]
+    #     - EdgeType: ["ShiftPtr"]
+    #   ForkParameters:
+    #     - TransposeLDS: [0, 1]
+    #     - MatrixInstruction:
+    #       - [16, 16,  4, 4]
+    #       - [16, 16, 16, 1]
+    #     - PrefetchLocalRead: [0, 1, 3, 5, 9]
+    #     - PrefetchGlobalRead: [0, 1]
+    #     - ThreadTile:
+    #       - [ 2, 32 ]
+    #     - WorkGroup:
+    #       - [  16,16, 1 ]
+    #     - WorkGroupMapping: [8]
+    #     - GlobalSplitU: [1]
+    #     - InnerUnroll: [2]
+    #     - DepthU: [64]
+    #     - DepthULdsDivisor: [2]
+    #     - VectorWidth: [4, 8]
+    #     - PersistentKernel: [0, 1]
+    #     - PersistentKernelAlongBatch: [1]
+    #     - PrefetchAcrossPersistent: [0,1]
+    #   JoinParameters:
+    #   BenchmarkJoinParameters:
+    #   BenchmarkFinalParameters:
+    #     - ProblemSizes:
+    #       - Range: [ [1024], [1024], [1], [1024] ]
+    #       - Range: [ [1031], [1031], [8], [1031] ]
+
+    # - # BenchmarkProblemSizeGroup - Standard
+    #   InitialSolutionParameters:
+    #   BenchmarkCommonParameters:
+    #     - KernelLanguage: ["Assembly"]
+    #     - EdgeType: ["ShiftPtr"]
+    #   ForkParameters:
+    #     - TransposeLDS: [0, 1]
+    #     - MatrixInstruction:
+    #       - [ 4,  4,  4, 16]
+    #     - PrefetchLocalRead: [0, 1, 3, 5, 9]
+    #     - PrefetchGlobalRead: [0, 1]
+    #     - ThreadTile:
+    #       - [ 2, 32 ]
+    #     - WorkGroup:
+    #       - [  16,16, 1 ]
+    #     - WorkGroupMapping: [8]
+    #     - GlobalSplitU: [1]
+    #     - InnerUnroll: [2]
+    #     - DepthU: [64]
+    #     - DepthULdsDivisor: [2]
+    #     - VectorWidth: [4, 8]
+    #     - PersistentKernel: [0, 1]
+    #     - PersistentKernelAlongBatch: [1]
+    #     - PrefetchAcrossPersistent: [0,1]
+    #   JoinParameters:
+    #   BenchmarkJoinParameters:
+    #   BenchmarkFinalParameters:
+    #     - ProblemSizes:
+    #       - Range: [ [1024], [1024], [1], [1024] ]
+    #       - Range: [ [1031], [1031], [8], [1031] ]
+
+    # - # BenchmarkProblemSizeGroup - Standard
+    #   InitialSolutionParameters:
+    #   BenchmarkCommonParameters:
+    #     - KernelLanguage: ["Assembly"]
+    #     - EdgeType: ["ShiftPtr"]
+    #   ForkParameters:
+    #     - MatrixInstruction:
+    #       - [32, 32, 4, 2]
+    #       - [32, 32, 8, 1]
+    #     - PrefetchLocalRead: [0, 1, 3, 5, 9]
+    #     - PrefetchGlobalRead: [0, 1]
+    #     - ThreadTile:
+    #       - [ 2, 32 ]
+    #     - WorkGroup:
+    #       - [  16,16, 1 ]
+    #     - WorkGroupMapping: [8]
+    #     - GlobalSplitU: [1]
+    #     - InnerUnroll: [2]
+    #     - DepthU: [64]
+    #     - DepthULdsDivisor: [2]
+    #     - VectorWidth: [4, 8]
+    #     - PersistentKernel: [0, 1]
+    #     - PersistentKernelAlongBatch: [1]
+    #     - PrefetchAcrossPersistent: [0,1]
+    #     - GlobalSplitUAlgorithm: ["SingleBuffer", "MultipleBuffer"]
+    #     - GlobalSplitU: [2, 5, 15]
+    #   JoinParameters:
+    #   BenchmarkJoinParameters:
+    #   BenchmarkFinalParameters:
+    #     - ProblemSizes:
+    #       - Range: [ [1024,3,1030], [1024,3,1030], [1,1,2], [1024,3,1030] ]
