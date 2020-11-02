@@ -337,8 +337,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
         _filterType = [Code.LocalWriteInst, Code.GlobalReadInst, Code.Module]
         # count how many items to schedule (local writes as well as global reads), excluding Code.Placeholder() type
         writesToSched = sum(1 for p, q in itemsLWToSched if p.countTypeList(_filterType) or q.countTypeList(_filterType))
-        if writesToSched == 0:
-          itemsLWToSched = []
       except TypeError: # itemsLWToSched not tuple -> no piggybacked GR code
         if 1:
           # This counts the number of modules which contain a ds_write
