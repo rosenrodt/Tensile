@@ -1694,31 +1694,47 @@ class KernelWriter(metaclass=abc.ABCMeta):
             self.localWriteACode = Code.Module()
             self.localWriteBCode = Code.Module()
 
+          # TODO schedule waitcnt/barrier in makeSubIterSchedule()
           if kernel["PrefetchGlobalRead"] and kernel["LoopIters"] == 1 and subLdsIter > 0:
             if self.enable["Wait"]:
               kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, 1, 0, -1, "wait for local write"))
             if self.enable["Sync"]:
               kl.append(self.syncThreads(kernel, "sync for local read after write"))
+
           if not unrollLoopHeaderCodeScheduled:
             self.makeSchedule(kernel, tensorParametersA, tensorParametersB, localWriteEndIter, subLdsIter)
             kl.append(str(self.unrollLoopHeaderCode))
-        # end 1st of subloop
 
-        if subLdsIter<kernel["DepthULdsDivisor"]-1 and u==kernel["LoopIters"]-self.numItersPLR and not kernel["PrefetchGlobalRead"]:
+        # print(">>>>> %s"%(self.kernelName))
+        # print("u = %u, sub = %u, numItersPLR = %u, loopIters = %u)"%(u, subLdsIter, self.numItersPLR, kernel["LoopIters"]))
+
+        # for PGR=0 where generator can't schedule the instructions (yet),
+        # we duplicate the local write codegen and append to string list directly
+        if not kernel["PrefetchGlobalRead"]:
+          doWrite = False
+          if subLdsIter<kernel["DepthULdsDivisor"]-1 and u==kernel["LoopIters"]-self.numItersPLR:
+            doWrite = True
+            writeForNextLoop = 1
+          if subLdsIter>0 and self.numItersPLR==0 and u==0:
+            assert doWrite==False # should be exclusive with the previous condition
+            doWrite = True
+            writeForNextLoop = 0
           # unrolled loop: local write A, B
-          if self.enable["Wait"]:
-            kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, -1, 0, "5wait for local read"))
-          if self.enable["Sync"]:
-            kl.append(self.syncThreads(kernel, "PGR=0, prior iter done reading lds"))
-          if self.enable["LocalWrite"]:
-            kl.append(self.comment("local write a"))
-            kl.append(self.localWriteDo(kernel, tensorParametersA, (subLdsIter+1)%kernel["DepthULdsDivisor"]))
-            kl.append(self.comment("local write b"))
-            kl.append(self.localWriteDo(kernel, tensorParametersB, (subLdsIter+1)%kernel["DepthULdsDivisor"]))
-          if self.enable["Wait"]:
-            kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, "2prefetch wait for local write"))
-          if self.enable["Sync"]:
-            kl.append(self.syncThreads(kernel))
+          if doWrite:
+            if self.enable["Wait"]:
+              kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, -1, 0, "5wait for local read"))
+            if self.enable["Sync"]:
+              kl.append(self.syncThreads(kernel, "PGR=0, prior iter done reading lds"))
+            if self.enable["LocalWrite"]:
+              kl.append(self.comment("local write a"))
+              kl.append(self.localWriteDo(kernel, tensorParametersA, (subLdsIter+writeForNextLoop)%kernel["DepthULdsDivisor"]))
+              kl.append(self.comment("local write b"))
+              kl.append(self.localWriteDo(kernel, tensorParametersB, (subLdsIter+writeForNextLoop)%kernel["DepthULdsDivisor"]))
+            if self.enable["Wait"]:
+              kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, "2prefetch wait for local write"))
+            if self.enable["Sync"]:
+              kl.append(self.syncThreads(kernel))
+
         # which loop iteration to reset the LRO,
         # note if PLR=0, isResetLroIter is False for all u
         isResetLroIter = (u == localWriteEndIter)
