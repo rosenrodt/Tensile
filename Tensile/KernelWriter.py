@@ -30,6 +30,7 @@ import os
 import shutil
 import subprocess
 import copy
+from itertools import zip_longest
 
 ################################################################################
 # Kernel Writer
@@ -329,16 +330,16 @@ class KernelWriter(metaclass=abc.ABCMeta):
     else:
       # create a plan:
       itemsLWToSched = list(self.localWriteACode.items()) + list(self.localWriteBCode.items())
-      # piggyback one-by-one each global read instruction on each local write instruction
+      # piggyback each global read instruction after each local write instruction to maximize G2L buffer utilization
       if kernel["PrefetchGlobalRead"] == 2 or kernel["DepthULdsDivisor"]>1:
-        from itertools import zip_longest
         itemsLWToSched = list(zip_longest(itemsLWToSched, itemsGRToSchedLater, fillvalue=Code.Placeholder()))
       try:
         _filterType = [Code.LocalWriteInst, Code.GlobalReadInst, Code.Module]
+        # count how many items to schedule (local writes as well as global reads), excluding Code.Placeholder() type
         writesToSched = sum(1 for p, q in itemsLWToSched if p.countTypeList(_filterType) or q.countTypeList(_filterType))
         if writesToSched == 0:
           itemsLWToSched = []
-      except TypeError:
+      except TypeError: # itemsLWToSched not tuple -> no piggybacked GR code
         if 1:
           # This counts the number of modules which contain a ds_write
           # Scheduler below keeps all writes in the same module in same iteration
@@ -401,11 +402,11 @@ class KernelWriter(metaclass=abc.ABCMeta):
           imod = Code.Module("LocalWriteMod%u"%u)
           imodNGLL = Code.Module("LocalWriteMod%u"%u)
 
-          # Prepend a waitcnt if needed. Item could be a tuple depends on whether
-          # other code modules are piggybacked on LW module
+          # Prepend a waitcnt if needed. List item could be a tuple of Code.Module's depending on whether
+          # other code modules (e.g., GR codes) are piggybacked on LW module
           try:
             writesPerItem = item[0].countType(Code.LocalWriteInst)
-          except TypeError:
+          except TypeError: # itemsLWToSched not tuple -> no piggybacked GR code
             writesPerItem = item.countType(Code.LocalWriteInst)
           imod.addComment0("sched write - iter %u writesPerItem=%u"%(u,writesPerItem))
           imodNGLL.addComment0("sched write - iter %u writesPerItem=%u"%(u,writesPerItem))
@@ -433,13 +434,13 @@ class KernelWriter(metaclass=abc.ABCMeta):
             imod.addCode(item[0]) # original LW code
             imod.addCode(item[1]) # GR code piggybacked alongside LW code
             readsToWait = readsToWait + item[1].countType(Code.GlobalReadInst) # GR instruction increments vmcnt
-          except TypeError: # not tuple -> no piggybacked GR code
+          except TypeError: # itemsLWToSched not tuple -> no piggybacked GR code
             imod.addCode(item)
           self.perIterLocalWriteCode[u].addCode(imod)
           try:
-            imodNGLL.addCode(copy.deepcopy(item[0]))
-            #imodNGLL.addCode(copy.deepcopy(item[1])) # omit GR code
-          except TypeError:
+            imodNGLL.addCode(copy.deepcopy(item[0])) # original LW code
+            #imodNGLL.addCode(copy.deepcopy(item[1])) # omit GR code piggybacked alongside LW code
+          except TypeError: # itemsLWToSched not tuple -> no piggybacked GR code
             imodNGLL.addCode(copy.deepcopy(item))
           self.perIterLocalWriteCodeNGLL[u].addCode(imodNGLL)
         itemsLWToSched = itemsLWToSched[itemPerIter:]
@@ -2101,16 +2102,15 @@ class KernelWriter(metaclass=abc.ABCMeta):
       if self.enable["Sync"]:
         kl.append(self.syncThreads(kernel))
 
-      # the following read/write addresses could be modified in recalcLocalReadWriteAddressesAB() due to policy change
+      # the following read/write addresses could be modified in recalcLocal(Read|Write)Addresses due to policy change
       self.oriLraA = None # back up original local read address vgpr
       self.oriLraB = None
       self.oriLwaA = None # back up original local write address vgpr
       self.oriLwaB = None
       for subLdsIter in range(0, kernel["DepthULdsDivisor"]):
-        # change local write poilcy from interleave-K to fractional as tail loop
-        # iterate LDS read address one unit of K at a time
-        # change local read policy from wider local read to one unit of K at a time
         if kernel["DepthULdsDivisor"] > 1:
+          # change local write poilcy from interleave-K to fractional as tail loop
+          # iterate LDS read address one unit of K at a time
           kl.append(self.comment("Recalc local write offsets"))
           kl.append(self.recalcLocalWriteAddresses(kernel, tensorParametersA, subLdsIter))
           kl.append(self.recalcLocalWriteAddresses(kernel, tensorParametersB, subLdsIter))
@@ -2126,6 +2126,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
           kl.append(self.localWriteDo(kernel, tensorParametersA, None))
           kl.append(self.comment("local write b"))
           kl.append(self.localWriteDo(kernel, tensorParametersB, None))
+        # change local read policy from wider local read to one unit of K at a time
         kl.append(self.comment("Recalc local read offsets"))
         kl.append(self.recalcLocalReadAddressesAB(kernel))
         if self.enable["Wait"]:
