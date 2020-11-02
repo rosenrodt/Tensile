@@ -2439,18 +2439,12 @@ class Solution:
       # EPS not supported with PAP yet
       if state["PrefetchAcrossPersistent"]:
         state["ExpandPointerSwap"] = 0
+      # EPS not supported with SplitLDS yet
       if state["DepthULdsDivisor"] > 1:
         state["ExpandPointerSwap"] = 0
 
     #print("PackedC0IdxChars", state["PackedC0IdxChars"])
     #print("PackedC1IdxChars", state["PackedC1IdxChars"])
-    if state["DepthULdsDivisor"] > 1:
-      if state["PrefetchGlobalRead"] == 2:
-        reject(state, "DepthULdsDivisor > 1 does not support PrefetchGlobalRead=2")
-      if state["ScheduleIterAlg"] != 3:
-        reject(state, "DepthULdsDivisor > 1 does not support SchedulIterAlg other than 3")
-      if state["DirectToLds"] == True:
-        reject(state, "DepthULdsDivisor > 1 does not support DirectToLds")
 
     # Set up stagger shift:
     bpeAB = int(4*state["ProblemType"]["DataType"].numRegisters())
@@ -3108,6 +3102,21 @@ class Solution:
           reject(state, "wider localRead only support (PrefetchLocalRead %u >= LoopIters %u) or (InnerUnroll %u > LocalReadxN)" % (state["PrefetchLocalRead"],state["LoopIters"],state["InnerUnroll"]))
       if (state["LoopIters"] - (state["PrefetchLocalRead"]%state["LoopIters"])*state["LocalReadVectorWidth"]//state["ProblemType"]["DataType"].numMIInput()) < 0:
         reject(state, "LoopIters %u should greater than PrefetchIters %u" % ((state["LoopIters"],(state["PrefetchLocalRead"]%state["LoopIters"])*state["LocalReadVectorWidth"]//state["ProblemType"]["DataType"].numMIInput())))
+
+    if state["DepthULdsDivisor"] > 1:
+      if state["PrefetchGlobalRead"] == 2:
+        reject(state, "DepthULdsDivisor > 1 does not support PrefetchGlobalRead=2")
+      if state["ScheduleIterAlg"] != 3:
+        reject(state, "DepthULdsDivisor > 1 does not support SchedulIterAlg other than 3")
+      if state["DirectToLds"] == True:
+        reject(state, "DepthULdsDivisor > 1 does not support DirectToLds")
+      if state["ProblemType"]["TLUA"] or state["ProblemType"]["TLUA"] or not state["TransposeLDS"]:
+        reject(state, "DepthULdsDivisor > 1: Only works with TN problem layout and TransposeLDS")
+      if state["PrefetchGlobalRead"]==1 and state["PrefetchLocalRead"]==0:
+        reject(state, "PGR1 + PLR0 in SplitLDS requires double G2L buffer which is yet to be implemented")
+      if state["ProblemType"]["DataType"].numRegisters()*state["GlobalReadVectorWidth"]//state["DepthULdsDivisor"] < 1:
+        reject(state, "SplitLDS requires wider GlobalReadVectorWidth (assert RegisterPerElem (%f) * GRVW (%u) // DepthULdsDivisor (%u) >= 1"%
+          (state["ProblemType"]["DataType"].numRegisters(),state["GlobalReadVectorWidth"],state["DepthULdsDivisor"]))
 
     # Determine if we can load directly-to-LDS.
     # Transpose requires a trip through registers to perform the transpose so can't use DirectToLdsA
