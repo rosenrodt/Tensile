@@ -7282,7 +7282,6 @@ class KernelWriterAssembly(KernelWriter):
         self.numReadsIterCoalescedB = 1
         self.lrvwA = kernel["ProblemType"]["DataType"].numMIInput()
         self.lrvwB = kernel["ProblemType"]["DataType"].numMIInput()
-        imod.addCode(self.comment("recalculate LocalReadAddr"))
         kStr = ""
 
         # need to back-up the LRA before reCalculation for wider local read (when no wlr, no need to do this)

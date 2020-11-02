@@ -2117,7 +2117,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
         # change local write poilcy from interleave-K to fractional as tail loop
         # iterate LDS read address one unit of K at a time
         # change local read policy from wider local read to one unit of K at a time
-        kl.append(self.recalcLocalReadWriteAddressesAB(kernel, tensorParametersA, tensorParametersB, subLdsIter))
+        if kernel["DepthULdsDivisor"] > 1:
+          kl.append(self.comment("Recalc local write offsets"))
+          kl.append(self.recalcLocalWriteAddresses(kernel, tensorParametersA, subLdsIter))
+          kl.append(self.recalcLocalWriteAddresses(kernel, tensorParametersB, subLdsIter))
         if self.enable["Sync"]:
           if subLdsIter > 0:
             kl.append(self.comment("sync before local write"))
@@ -2130,6 +2133,8 @@ class KernelWriter(metaclass=abc.ABCMeta):
           kl.append(self.localWriteDo(kernel, tensorParametersA, None)) # TODO ANT: hack
           kl.append(self.comment("local write b"))
           kl.append(self.localWriteDo(kernel, tensorParametersB, None))
+        kl.append(self.comment("Recalc local read offsets"))
+        kl.append(self.recalcLocalReadAddressesAB(kernel))
         if self.enable["Wait"]:
           kl.append(self.wait(kernel, tensorParametersA, tensorParametersB, -1, 0, -1, "5wait for local write"))
         if self.enable["Sync"]:
@@ -3116,17 +3121,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
   @abc.abstractmethod
   def recalcLocalWriteAddresses(self, kernel, tP, subLdsIter):
     return ""
-
-  def recalcLocalReadWriteAddressesAB(self, kernel, tPA, tPB, subLdsIter):
-    kStr = ""
-    kStr += self.comment("Recalc local read/write offsets")
-
-    if kernel["DepthULdsDivisor"] > 1:
-      kStr += self.recalcLocalWriteAddresses(kernel, tPA, subLdsIter)
-      kStr += self.recalcLocalWriteAddresses(kernel, tPB, subLdsIter)
-    kStr += self.recalcLocalReadAddressesAB(kernel)
-
-    return kStr
 
   ##############################################################################
   # Declare Loop Num Iterations
