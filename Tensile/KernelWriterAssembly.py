@@ -5519,12 +5519,6 @@ class KernelWriterAssembly(KernelWriter):
         hex(unrollInc),
         "inc counter%s"%(loopChar) )
 
-      if kernel["DepthULdsDivisor"] > 1:
-        startCounter = (subLdsIter+1)*(kernel["_DepthULds"])
-        predBranchLabel = self.getNamedLabel("TailLoopEnd%s%s"%(loopChar, "_G2L%u"%(subLdsIter)))
-        kStr += inst("s_cmp_ge_u32", sgpr("OrigLoopCounter"), startCounter, "OrigLoopCounter >= %u"%(startCounter) )
-        kStr += inst("s_cbranch_scc1", predBranchLabel, "G2L buffer part %u of %u"%(subLdsIter, kernel["DepthULdsDivisor"]))
-
       endCounter = 0
       # if subLdsIter is not None:
       #   # ex: du=64 divisor=2: 1st tail endCounter=32; 2nd tail endCounter=0
@@ -5578,10 +5572,19 @@ class KernelWriterAssembly(KernelWriter):
             hex(endCounter), \
           "counter%s==%d"%(loopChar,endCounter) )
 
-    if not finalLoop and not tailLoop:
+    if not finalLoop:
       # just an exit check, else fall through to the next loop copy
       kStr += inst("s_cbranch_scc1 %s"%(loopLabelEndOddExit), "exit Loop%s"%loopChar )
     else: #finalLoop:
+
+      if tailLoop and kernel["DepthULdsDivisor"] > 1:
+        tailLoopLabelEnd = self.getNamedLabel(
+          "TailLoopEnd%s%s"%(loopChar, "_G2L%s"%(kernel["DepthULdsDivisor"]-1) if kernel["DepthULdsDivisor"] > 1 else "") )
+        kStr += inst("s_cbranch_scc1", tailLoopLabelEnd, "break Loop%s"%loopChar)
+        thresForNextSubLoop = (subLdsIter+1)*(kernel["_DepthULds"])
+        kStr += inst("s_cmp_ge_u32", sgpr("OrigLoopCounter"), thresForNextSubLoop,
+          "OrigLoopCounter >= %u (G2L buffer %u/%u)"%(thresForNextSubLoop, subLdsIter, kernel["DepthULdsDivisor"]) )
+
       kStr += inst("s_cbranch_scc0 %s"%loopLabelBegin, \
           "restart Loop%s"%(loopChar ))
 
@@ -5616,6 +5619,7 @@ class KernelWriterAssembly(KernelWriter):
             self.vgprPool.checkIn(self.oriLraB)
             self.oriLraA = None
             self.oriLraB = None
+          if self.oriLwaA != None:
             kStr += inst("v_mov_b32", vgpr("LocalWriteAddrA"), vgpr(self.oriLwaA), "restore LWA")
             kStr += inst("v_mov_b32", vgpr("LocalWriteAddrB"), vgpr(self.oriLwaB), "restore LWA")
             self.vgprPool.checkIn(self.oriLwaA)

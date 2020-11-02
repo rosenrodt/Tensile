@@ -2189,8 +2189,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
           else:
             kl.append(self.macIter(kernel, 0, tailLoopInnerUnroll, True))
         # tail: close
-        finalLoop = subLdsIter == kernel["DepthULdsDivisor"]-1
-        kl.append(self.closeLoop(kernel, -1, finalLoop, subLdsIter if kernel["DepthULdsDivisor"]>1 else None))
+        kl.append(self.closeLoop(kernel, -1, True, subLdsIter if kernel["DepthULdsDivisor"]>1 else None))
     if kernel["DepthULdsDivisor"]>1:
       kl.append(self.closeLoop(kernel, -1, None, emitEndLabelOnly=True))
     self.inTailLoop = False
